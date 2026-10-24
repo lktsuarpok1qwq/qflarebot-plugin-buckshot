@@ -1,4 +1,4 @@
-import { loadTemplates } from '../templates/settings.js';
+import { DEFAULT_CONFIGURATION } from '../templates/reply-config.js';
 import type { ReplyConfiguration } from '../templates/reply-config.js';
 import type { PluginContext, Session } from '@qqbot/sdk';
 import { BuckshotRoom, BuckshotPlayerRegistry } from '../room/durable.js';
@@ -6,6 +6,7 @@ import type { CreateInput, Request } from '../room/model.js';
 import { identifier, payout, validateConfig } from '../config.js';
 import { requireRule } from '../game/types.js';
 import { processMoney } from './points.js';
+import { admissionName, type NicknameSnapshot } from './nickname.js';
 
 export function roomFor(ctx: PluginContext, group: string) {
     identifier(group);
@@ -59,7 +60,8 @@ export async function coordinateJoin(ctx: PluginContext, group: string, request:
     const serialized = JSON.stringify({ group, request });
     await ctx.db.run('INSERT OR IGNORE INTO {coord_ops}(bot,id,game_id,request,state) VALUES(?,?,?,?,?)', ctx.botId, request.actionId, request.gameId, serialized, 'PENDING');
     const prior = await ctx.db.first<{ request: string; state: string }>('SELECT request,state FROM {coord_ops} WHERE bot=? AND game_id=? AND id=?', ctx.botId, request.gameId, request.actionId);
-    requireRule(prior?.request === serialized, '加入编号冲突');
+    const saved = prior ? JSON.parse(prior.request) as { group: string; request: Request } & NicknameSnapshot : null;
+    requireRule(prior && saved && JSON.stringify({ group: saved.group, request: saved.request }) === serialized, '加入编号冲突');
     requireRule(prior.state !== 'REJECTED', '该加入请求已拒绝，请查询状态后重新加入');
 
     try {
@@ -72,6 +74,11 @@ export async function coordinateJoin(ctx: PluginContext, group: string, request:
         }
 
         throw error;
+    }
+
+    if (request.action.type === 'join') {
+        const name = await admissionName(ctx, request.gameId, request.actionId, group, request.actor, saved);
+        request = { ...request, action: { ...request.action, member: { ...request.action.member, name } } };
     }
 
     const room = roomFor(ctx, group);
@@ -97,7 +104,7 @@ export async function coordinateJoin(ctx: PluginContext, group: string, request:
 
 export async function drain(ctx: PluginContext, group: string, session?: Session, settings?: ReplyConfiguration) {
     const room = roomFor(ctx, group);
-    const templates = settings ?? await loadTemplates(ctx);
+    const templates = settings ?? DEFAULT_CONFIGURATION;
     let work = await room.work(undefined, undefined, true, templates);
 
     if (!work) { return { room: null, panelHandled: false }; }
@@ -171,7 +178,7 @@ export async function cron(ctx: PluginContext): Promise<void> {
 
     const jobs = await ctx.db.all<{ group_id: string; status: string; intent: string; revision: number }>('SELECT group_id,status,intent,revision FROM {rooms} WHERE bot=? AND due<=? ORDER BY due LIMIT 8', ctx.botId, Date.now());
 
-    const templates = jobs.length ? await loadTemplates(ctx) : undefined;
+    const templates = DEFAULT_CONFIGURATION;
 
     for (const job of jobs) {
         if (Date.now() >= stopAt) { break; }

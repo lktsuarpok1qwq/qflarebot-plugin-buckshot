@@ -1,18 +1,17 @@
 import { renderMessage } from '../templates/send.js';
-import { loadTemplates } from '../templates/settings.js';
+import { DEFAULT_CONFIGURATION } from '../templates/reply-config.js';
 import type { ReplyConfiguration } from '../templates/reply-config.js';
 import { type OutgoingMessage, type PluginContext, type Session } from '@qqbot/sdk';
 import { requireRule, type Mode } from '../game/types.js';
 import type { CreateInput, Request } from '../room/model.js';
 import { base } from './panel.js';
-import { readConfig } from './database.js';
+import { ensureDatabase, readConfig } from './database.js';
 import { coordinateCreate, coordinateJoin, drain, roomFor } from './coordinator.js';
 import { preflight } from './points.js';
 import { identifier, payout } from '../config.js';
+import { admissionName } from './nickname.js';
 
 export const DIFFICULTIES = ['新手', '普通', '困难', '专家', '恶魔'];
-
-function cleanName(value: string): string { return value.replace(/[\r\n<>\[\](){}`]/g, '').slice(0, 24) || '玩家'; }
 
 export async function operationId(session: Session): Promise<string> {
     requireRule(session.id || session.messageId, '缺少稳定事件编号');
@@ -22,13 +21,14 @@ export async function operationId(session: Session): Promise<string> {
 }
 
 export async function command(ctx: PluginContext, session: Session, text: string, settings?: ReplyConfiguration): Promise<OutgoingMessage | void> {
-    const templates = settings ?? await loadTemplates(ctx);
+    const templates = settings ?? DEFAULT_CONFIGURATION;
     requireRule(session.scene === 'group', '游戏操作请在群内进行');
     const args = text.trim().split(/\s+/), action = args[0] || '';
 
     if (action === '帮助') { return renderMessage(templates, 'help'); }
 
     if (action === '创建') {
+        await ensureDatabase(ctx);
         const mode = ({ 单人: 'solo', 双人: 'duo', 多人: 'multi' } as Record<string, Mode>)[args[1]];
         const stake = args[2] === '免费' ? 0 : Number(args[2]), difficulty = DIFFICULTIES.indexOf(args[3] || '普通');
         requireRule(mode && Number.isSafeInteger(stake) && stake >= 0 && difficulty >= 0, '创建参数无效，发送 /恶魔轮盘 帮助');
@@ -38,7 +38,7 @@ export async function command(ctx: PluginContext, session: Session, text: string
         requireRule(!stake || mode !== 'solo' || payout(stake, config.values.multipliers[difficulty]) <= 1e12 && payout(stake, config.values.multipliers[difficulty]) - stake <= config.values.rewardLimit, '返还或奖励超出上限');
         const create = {
             mode, stake, difficulty, gameId, botId: ctx.botId, groupId: session.targetId, config,
-            member: { id: session.userId, name: cleanName(session.userName || session.userId), ready: true, privateId: session.userId }
+            member: { id: session.userId, name: '', ready: true, privateId: session.userId }
         };
         await ctx.db.run('INSERT INTO {coord_ops}(bot,id,game_id,request,state,expires_at) VALUES(?,?,?,?,?,?)', ctx.botId, `create:${gameId}`, gameId, JSON.stringify({ input: create, expiresAt: Date.now() + 600000 }), 'CREATE_READY', Date.now() + 600000);
 
@@ -82,6 +82,7 @@ export async function command(ctx: PluginContext, session: Session, text: string
 async function confirmCreate(ctx: PluginContext, session: Session, gameId: string, templates: ReplyConfiguration, expected?: { mode: Mode; stake: number; difficulty: number }): Promise<OutgoingMessage | void> {
     identifier(gameId);
     await operationId(session);
+    await ensureDatabase(ctx);
     const room = roomFor(ctx, session.targetId);
     const issued = await ctx.db.first<{ request: string }>('SELECT request FROM {coord_ops} WHERE bot=? AND game_id=? AND id=?', ctx.botId, gameId, `create:${gameId}`);
     requireRule(issued, '创建确认已失效');
@@ -97,22 +98,20 @@ async function confirmCreate(ctx: PluginContext, session: Session, gameId: strin
         await preflight(ctx, [session.userId], authorized.stake);
     }
 
-    const create = prior ?? authorized;
+    const create = prior ?? { ...authorized, member: { ...authorized.member, name: await admissionName(ctx, gameId, `create:${gameId}`, session.targetId, session.userId, JSON.parse(issued.request)) } };
     await coordinateCreate(ctx, create);
 
     if (create.mode === 'solo') {
-        const sent = await drain(ctx, session.targetId, session, templates);
+        await drain(ctx, session.targetId, session, templates);
 
-        if (sent.panelHandled) { return; }
-
-        return renderMessage(templates, 'panel', { room: sent.room! });
+        return;
     }
 
     return renderMessage(templates, 'panel', { room: (await room.publicState())! });
 }
 
 export async function interact(ctx: PluginContext, session: Session, data: unknown, settings?: ReplyConfiguration): Promise<OutgoingMessage | void> {
-    const templates = settings ?? await loadTemplates(ctx);
+    const templates = settings ?? DEFAULT_CONFIGURATION;
     requireRule(session.scene === 'group' && data && typeof data === 'object', '仅群内操作');
     const input = data as { create?: { mode: Mode; stake: number; difficulty: number }; owner?: string; gameId: string; expectedVersion: number; action?: Request['action']; menu?: number };
     const room = roomFor(ctx, session.targetId);
@@ -123,33 +122,39 @@ export async function interact(ctx: PluginContext, session: Session, data: unkno
         return confirmCreate(ctx, session, input.gameId, templates, input.create);
     }
 
+    if (input.menu !== undefined) {
+        requireRule(Number.isSafeInteger(input.menu) && input.menu >= 0, '分页无效');
+        const snapshot = await room.menu(input.gameId, session.userId);
+        const changed = snapshot.room.version !== input.expectedVersion;
+
+        return renderMessage(templates, 'menu', { ...snapshot, offset: changed ? 0 : input.menu, actor: session.userId, notice: changed ? 'menuRefreshed' : undefined });
+    }
+
     const actionId = await operationId(session);
-    const needsState = input.menu !== undefined || input.action?.type === 'join' || input.action?.type === 'start';
+    const needsState = input.action?.type === 'join' || input.action?.type === 'start';
     const current = needsState ? await room.publicState() : null;
 
     if (needsState) { requireRule(current && current.gameId === input.gameId, '房间已失效'); }
-
-    if (input.menu !== undefined) {
-        requireRule(current!.version === input.expectedVersion, '面板已更新，请查询状态');
-        const moves = await room.moves(session.userId);
-        requireRule(Number.isInteger(input.menu) && input.menu >= 0, '分页无效');
-
-        return renderMessage(templates, 'menu', { room: current!, moves, offset: input.menu, actor: session.userId });
-    }
 
     requireRule(input.action, '操作无效');
     let request: Request = { gameId: input.gameId, expectedVersion: input.expectedVersion, actionId, actor: session.userId, action: input.action };
 
     if (request.action.type === 'join') {
-        request = { ...request, action: { type: 'join', member: { id: session.userId, name: cleanName(session.userName || session.userId), ready: false, privateId: session.userId } } };
+        request = { ...request, action: { type: 'join', member: { id: session.userId, name: '', ready: false, privateId: session.userId } } };
 
         if (!await room.operation(input.gameId, actionId)) { await preflight(ctx, [session.userId], current!.stake); }
 
-        await coordinateJoin(ctx, session.targetId, request);
+        try { await coordinateJoin(ctx, session.targetId, request); } catch (error) {
+            if (!(error instanceof Error) || error.message !== '面板已更新，请查询状态') { throw error; }
+
+            return renderMessage(templates, 'panel', { room: (await room.publicState())!, notice: 'staleAction' });
+        }
     } else {
         if (request.action.type === 'start' && !await room.operation(input.gameId, actionId)) { await preflight(ctx, current!.members.map(p => p.id), current!.stake); }
 
-        await room.command(request);
+        const result = await room.act(request);
+
+        if (result.stale) { return renderMessage(templates, 'panel', { room: result.room!, notice: 'staleAction' }); }
     }
 
     const sent = await drain(ctx, session.targetId, session, templates);
@@ -159,5 +164,5 @@ export async function interact(ctx: PluginContext, session: Session, data: unkno
         return renderMessage(templates, 'quit', { values: { gameId: result.gameId, version: String(result.version) }, dynamic: { confirmQuit: JSON.stringify({ ...base(result), action: { type: 'quit' } }) } });
     }
 
-    if (!sent.panelHandled) { return renderMessage(templates, 'panel', { room: result }); }
+    if (!sent.panelHandled && request.action.type !== 'play' && request.action.type !== 'quit') { return renderMessage(templates, 'panel', { room: result }); }
 }

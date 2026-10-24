@@ -2,7 +2,7 @@ import type { PluginContext } from '@qqbot/sdk';
 import { DEFAULTS, identifier, validateConfig, type Config, type ConfigSnapshot } from '../config.js';
 import { requireRule } from '../game/types.js';
 
-export const DATABASE_VERSION = 3;
+export const DATABASE_VERSION = 4;
 
 export async function ensureDatabase(ctx: PluginContext): Promise<void> {
     async function marker() { return ctx.db.first<{ version: number }>('SELECT version FROM {meta} WHERE id=1'); }
@@ -25,8 +25,6 @@ export async function ensureDatabase(ctx: PluginContext): Promise<void> {
         "CREATE INDEX {rooms_open} ON {rooms}(bot,group_id) WHERE status<>'CLOSED'",
         'CREATE TABLE {coord_ops} (bot TEXT NOT NULL, id TEXT NOT NULL, game_id TEXT NOT NULL, request TEXT NOT NULL, state TEXT NOT NULL, expires_at INTEGER, PRIMARY KEY(bot,game_id,id))',
         'CREATE INDEX {coord_expiry} ON {coord_ops}(bot,state,expires_at)',
-        'CREATE TABLE {templates}(bot TEXT PRIMARY KEY,revision INTEGER NOT NULL,value TEXT NOT NULL,op TEXT NOT NULL)',
-        'CREATE TABLE {template_ops}(bot TEXT NOT NULL,id TEXT NOT NULL,request_hash TEXT NOT NULL CHECK(length(request_hash)=64),result TEXT NOT NULL,PRIMARY KEY(bot,id))',
         `INSERT INTO {meta}(id,version) VALUES(1,${DATABASE_VERSION})`
     ];
 

@@ -6,7 +6,7 @@ import { requireRule } from '../game/types.js';
 import { legalActions } from '../game/engine.js';
 import type { CreateInput, MoneyTask, Request, RoomState, Task } from './model.js';
 import { localWake, workDue, canClose } from './schedule.js';
-import { blockClock, cancelGame, clock, mutate, startGame, tick, view } from './state.js';
+import { blockClock, cancelGame, clock, mutate, playerName, startGame, tick, view } from './state.js';
 
 abstract class StoredObject extends PluginDurableObject {
     protected cache?: Map<string, unknown>;
@@ -190,7 +190,7 @@ export class BuckshotRoom extends StoredObject {
             requireRule(!this.read(`closed:${input.gameId}`), '创建编号已关闭');
             const s: RoomState = {
                 ...input, schemaVersion: 2, host: input.member.id, version: 1, status: 'WAITING', createdAt: Date.now(),
-                members: [input.member], paused: false, recovery: false, remainingMs: cfg.turnSeconds * 1000, reminderSent: false,
+                members: [{ ...input.member, name: playerName(input.member.name, []) }], paused: false, recovery: false, remainingMs: cfg.turnSeconds * 1000, reminderSent: false,
                 outbox: [], seq: 0, money: [], reserved: false, renewal: 0, released: [], confirmations: {}, indexVersion: 0
             };
             this.write('room', s);
@@ -225,10 +225,29 @@ export class BuckshotRoom extends StoredObject {
         });
     }
 
-    moves(actor: string) {
-        const s = this.state();
+    menu(gameId: string, actor: string) {
+        identifier(gameId);
+        identifier(actor);
+        const s = this.state(gameId), room = view(s), player = s.game?.players.find(p => p.id === actor);
+        const current = s.game?.players.find(p => p.id === s.game?.current);
+        const reason = !s.members.some(m => m.id === actor) ? 'menuSpectator'
+            : ['FINISHED', 'SETTLED', 'CANCELLED', 'CLOSED'].includes(s.status) || s.game?.finished ? 'menuEnded'
+                : s.recovery ? 'menuRecovery' : s.paused ? 'menuPaused'
+                    : s.status === 'WAITING' ? 'menuWaiting' : s.status !== 'PLAYING' ? 'menuPreparing'
+                        : player && player.life <= 0 ? 'menuEliminated'
+                            : s.game?.current !== actor ? 'menuOtherTurn'
+                                : s.outbox.some(t => t.critical && t.state !== 'SENT') ? 'menuBusy'
+                                    : s.deadline === undefined || s.deadline <= Date.now() ? 'menuExpired' : undefined;
 
-        return s.game ? legalActions(s.game, actor) : [];
+        return { room, moves: reason || !s.game ? [] : legalActions(s.game, actor), reason, name: current?.name };
+    }
+
+    async act(request: Request) {
+        try { return { stale: false, room: await this.command(request) }; } catch (error) {
+            if (!(error instanceof Error) || error.message !== '面板已更新，请查询状态') { throw error; }
+
+            return { stale: true, room: this.publicState() };
+        }
     }
 
     publicState() {
@@ -378,7 +397,7 @@ export class BuckshotRoom extends StoredObject {
             if (claim && next?.state === 'PENDING') {
                 if (next.panel && !next.snapshot) { next.snapshot = structuredClone(view(s)); }
 
-                if (next.kind === 'message' && !next.payload) { next.payload = renderMessage(templates, next.panel ? 'panel' : next.parts![0].key, { room: next.snapshot, parts: next.parts }); }
+                if (next.kind === 'message' && !next.payload) { next.payload = renderMessage(templates, next.panel ? 'panel' : next.parts![0].key, { room: next.snapshot, parts: next.parts, mentionCurrent: next.panel }); }
 
                 next.state = 'SENDING';
                 next.lease = crypto.randomUUID();

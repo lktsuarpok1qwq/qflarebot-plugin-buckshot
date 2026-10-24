@@ -1,11 +1,12 @@
 import { button, keyboard, type OutgoingMessage } from '@qqbot/sdk';
 import type { ReplyConfiguration } from './reply-config.js';
 import { createReplyPresentation, replyPresentation, type MessageInput } from './presentation.js';
-import { REPLY_FIELDS, renderTemplate } from './replies.js';
+import { renderTemplate } from './replies.js';
 
-const plainPresentation = createReplyPresentation(renderTemplate, value => value, REPLY_FIELDS);
+const plainPresentation = createReplyPresentation(renderTemplate, value => value);
 
 export function renderMessage(config: ReplyConfiguration, key: string, input: MessageInput = {}): OutgoingMessage {
+    input = { ...input, now: input.now ?? Date.now() };
     const result = replyPresentation.message(config, key, input);
 
     if (new TextEncoder().encode(result.text).length > replyPresentation.maxBytes || !result.text.trim()) { throw Error('消息展开后的正文为空或超出上限'); }

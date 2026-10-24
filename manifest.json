@@ -70,21 +70,6 @@
   "routes": [
     {
       "method": "GET",
-      "path": "/api/templates",
-      "auth": "admin"
-    },
-    {
-      "method": "POST",
-      "path": "/api/templates",
-      "auth": "admin"
-    },
-    {
-      "method": "GET",
-      "path": "/api/template-operation",
-      "auth": "admin"
-    },
-    {
-      "method": "GET",
       "path": "/ui/",
       "auth": "admin"
     },

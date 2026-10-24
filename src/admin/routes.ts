@@ -1,4 +1,3 @@
-import { loadTemplates, saveTemplates } from '../templates/settings.js';
 import type { Route } from '@qqbot/sdk';
 import type { PointsService } from 'qflarebot-plugin-points';
 import { identifier } from '../config.js';
@@ -19,18 +18,6 @@ async function body(request: globalThis.Request, maxBytes = 16384): Promise<Reco
 }
 
 const routes: Route[] = [
-    { method: 'GET', path: '/api/templates', auth: 'admin', handler: async ({ ctx }) => Response.json(await loadTemplates(ctx)) },
-    { method: 'POST', path: '/api/templates', auth: 'admin', handler: async ({ ctx, request }) => Response.json(await saveTemplates(ctx, await body(request, 66560) as never)) },
-    {
-        method: 'GET', path: '/api/template-operation', auth: 'admin', handler: async ({ ctx, request }) => {
-            const id = new URL(request.url).searchParams.get('id');
-            identifier(id);
-            const row = await ctx.db.first<{ result: string }>('SELECT result FROM {template_ops} WHERE bot=? AND id=?', ctx.botId, id);
-            const result = row ? JSON.parse(row.result) : null;
-
-            return Response.json({ status: !result ? 'NOT_FOUND' : result.error ? 'REJECTED' : 'DONE', result });
-        }
-    },
     { method: 'GET', path: '/ui/', auth: 'admin', handler: () => new Response(page, { headers: { 'content-type': 'text/html; charset=utf-8' } }) },
     {
         method: 'GET', path: '/api/config', auth: 'admin', handler: async ({ ctx, request }) => {
@@ -130,7 +117,7 @@ export const adminRoutes: Route[] = routes.map(route => ({
         if (route.path === '/ui/') { return route.handler(input); }
 
         try {
-            if (!['/api/templates', '/api/room', '/api/room-operation', '/api/occupancy', '/api/points'].includes(route.path) || route.path === '/api/templates' && route.method === 'POST') { await ensureDatabase(input.ctx); }
+            if (!['/api/room', '/api/room-operation', '/api/occupancy', '/api/points'].includes(route.path)) { await ensureDatabase(input.ctx); }
 
             return await route.handler(input);
         } catch (error) { return Response.json({ error: error instanceof Error ? error.message : '操作未完成' }, { status: 409 }); }
