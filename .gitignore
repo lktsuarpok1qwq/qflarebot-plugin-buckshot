@@ -1,0 +1,7 @@
+/dev/
+/node_modules/
+/dist/
+AGENTS.md
+.agents/
+/.wrangler/
+README.md

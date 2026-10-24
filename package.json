@@ -1,0 +1,8 @@
+{
+    "name": "qflarebot-plugin-buckshot",
+    "version": "1.0.0",
+    "description": "恶魔轮盘：群聊对局、五档 AI 与可选积分下注",
+    "type": "module",
+    "keywords": ["qflarebot-plugin"],
+    "scripts": {"build": "qqbot-plugin build --cwd ."}
+}

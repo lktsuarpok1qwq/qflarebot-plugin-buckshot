@@ -1,0 +1,154 @@
+{
+  "name": "buckshot",
+  "version": "1.0.0",
+  "apiVersion": 4,
+  "permissions": [
+    "db",
+    "durable",
+    "proactive",
+    "recall",
+    "admin"
+  ],
+  "depends": {
+    "points.wallet": "optional"
+  },
+  "conflicts": [],
+  "commands": [
+    {
+      "name": "恶魔轮盘",
+      "description": "创建或操作恶魔轮盘房间",
+      "scenes": [
+        "group"
+      ]
+    },
+    {
+      "name": "恶魔轮盘 状态",
+      "description": "状态",
+      "scenes": [
+        "group"
+      ]
+    },
+    {
+      "name": "恶魔轮盘 退出",
+      "description": "退出",
+      "scenes": [
+        "group"
+      ]
+    },
+    {
+      "name": "恶魔轮盘 帮助",
+      "description": "帮助",
+      "scenes": [
+        "group"
+      ]
+    }
+  ],
+  "regex": [],
+  "events": [
+    {
+      "event": [
+        "qq.group.member_removed"
+      ]
+    },
+    {
+      "event": [
+        "qq.group.robot_removed"
+      ]
+    }
+  ],
+  "buttons": [
+    {
+      "id": "buckshot"
+    }
+  ],
+  "cron": [
+    {
+      "name": "buckshot-work",
+      "cron": "* * * * *"
+    }
+  ],
+  "routes": [
+    {
+      "method": "GET",
+      "path": "/api/templates",
+      "auth": "admin"
+    },
+    {
+      "method": "POST",
+      "path": "/api/templates",
+      "auth": "admin"
+    },
+    {
+      "method": "GET",
+      "path": "/api/template-operation",
+      "auth": "admin"
+    },
+    {
+      "method": "GET",
+      "path": "/ui/",
+      "auth": "admin"
+    },
+    {
+      "method": "GET",
+      "path": "/api/config",
+      "auth": "admin"
+    },
+    {
+      "method": "POST",
+      "path": "/api/config",
+      "auth": "admin"
+    },
+    {
+      "method": "GET",
+      "path": "/api/operation",
+      "auth": "admin"
+    },
+    {
+      "method": "GET",
+      "path": "/api/rooms",
+      "auth": "admin"
+    },
+    {
+      "method": "GET",
+      "path": "/api/room",
+      "auth": "admin"
+    },
+    {
+      "method": "GET",
+      "path": "/api/room-operation",
+      "auth": "admin"
+    },
+    {
+      "method": "POST",
+      "path": "/api/room",
+      "auth": "admin"
+    },
+    {
+      "method": "POST",
+      "path": "/api/occupancy",
+      "auth": "admin"
+    },
+    {
+      "method": "POST",
+      "path": "/api/points",
+      "auth": "admin"
+    }
+  ],
+  "hasMiddleware": false,
+  "services": [],
+  "durableObjects": [
+    "BuckshotRoom",
+    "BuckshotPlayerRegistry"
+  ],
+  "displayName": "恶魔轮盘",
+  "description": "单人 AI、双人及多人群聊对局",
+  "configSchema": {
+    "type": "object",
+    "properties": {}
+  },
+  "ui": {
+    "path": "/ui/",
+    "title": "恶魔轮盘",
+    "icon": "crosshair"
+  }
+}
