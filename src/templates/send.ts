@@ -13,10 +13,18 @@ export function renderMessage(config: ReplyConfiguration, key: string, input: Me
 
     if (result.buttons.length > 5 || result.buttons.some(row => row.length > 5 || row.some(b => [...b.label].length > 10))) { throw Error('消息按钮超出上限'); }
 
-    const commands: Record<string, string> = { help: '/恶魔轮盘 帮助', status: '/恶魔轮盘 状态', solo: '/恶魔轮盘 创建 单人 免费 普通', duo: '/恶魔轮盘 创建 双人 免费', multi: '/恶魔轮盘 创建 多人 免费' };
-    const rows = result.buttons.map(row => row.map(b => b.action === 'link' ? button.link(b.label, b.data!) : b.action === 'command' || commands[b.action] ? button.command(b.label, b.data ?? commands[b.action], { enter: b.enter }) : button.callback(b.label, b.data!, { id: 'buckshot' })));
+    const commands: Record<string, string> = { help: '/恶魔轮盘 帮助', status: '/恶魔轮盘 状态', solo: '/恶魔轮盘 新建 单人', duo: '/恶魔轮盘 新建 双人', multi: '/恶魔轮盘 新建 多人' };
+    const rows = result.buttons.map(row => row.map(b => {
+        const data = b.data ?? commands[b.action];
 
-    const plain = plainPresentation.message(config, key, input).text;
+        if (['solo', 'duo', 'multi'].includes(b.action) || b.action.startsWith('draft') && b.action !== 'draftAmount') {
+            return button.callback(b.label, JSON.stringify({ setup: data.trim().split(/\s+/).slice(1) }), { id: 'buckshot' });
+        }
+
+        return b.action === 'link' ? button.link(b.label, data!) : b.action === 'command' || b.action === 'draftAmount' || commands[b.action] ? button.command(b.label, data!, { enter: b.enter }) : button.callback(b.label, data!, { id: 'buckshot' });
+    }));
+
+    const plain = plainPresentation.message(config, key, input, false).text;
 
     return { text: plain, markdown: { content: result.text }, ...(rows.length ? { keyboard: keyboard(rows) } : {}) };
 }

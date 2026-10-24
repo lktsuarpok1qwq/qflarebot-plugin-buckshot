@@ -32,7 +32,7 @@ export async function ensureDatabase(ctx: PluginContext): Promise<void> {
         // 并发初始化的另一个事务成功后可继续；其他错误不能当作缺库。
         const current = await marker().catch(() => null);
 
-        if (current?.version !== 2) { throw error; }
+        if (current?.version !== DATABASE_VERSION) { throw error; }
     }
 }
 

@@ -132,8 +132,12 @@ export function chooseDemon(view: AIView, budgetMs: number, diagnostics?: { node
 
         const result: [Position, number][] = [];
 
+        const subsets: number[][] = [[], []];
+
+        for (const mask of s.shells) { subsets[mask & 1].push(mask); }
+
         for (const shell of [0, 1]) {
-            const subset = s.shells.filter(mask => (mask & 1) === shell);
+            const subset = subsets[shell];
 
             if (!subset.length) { continue; }
 
@@ -172,15 +176,20 @@ export function chooseDemon(view: AIView, budgetMs: number, diagnostics?: { node
 
         if (nodes >= 2400 || performance.now() - started >= budgetMs) { throw exhausted; }
 
-        const key = JSON.stringify([s, depth]), previous = cache.get(key);
+        const key = `${depth}|${s.remaining}|${s.actor}|${+s.saw}|${s.hp.join(',')}|${s.control.join(',')}|${s.hands[0].join(',')}|${s.hands[1].join(',')}|${s.shells.join(',')}`, previous = cache.get(key);
 
         if (previous !== undefined) { return previous; }
 
         nodes++;
         const moves = options(s);
         const forced = moves.length === 1 && moves[0].item !== undefined;
-        const scores = moves.map(move => value(s, move, depth + (forced ? 1 : 0)));
-        const result = s.actor === 0 ? Math.max(...scores) : Math.min(...scores);
+        let result = s.actor === 0 ? -Infinity : Infinity;
+
+        for (const move of moves) {
+            const score = value(s, move, depth + (forced ? 1 : 0));
+            result = s.actor === 0 ? Math.max(result, score) : Math.min(result, score);
+        }
+
         cache.set(key, result);
 
         return result;

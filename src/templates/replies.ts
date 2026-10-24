@@ -1,9 +1,25 @@
 // QQ 展示文案：只修改文字与排版，保留 {{变量名}}；修改后重新构建加载。
 export type Replies = Record<string, string>;
 export const DEFAULT_REPLIES: Replies = {
-    "help": "🎲 恶魔轮盘\n创建：/恶魔轮盘 创建 单人|双人|多人 免费|下注金额 新手|普通|困难|专家|恶魔\n状态：/恶魔轮盘 状态\n操作：/恶魔轮盘 操作 房间ID 版本 加入|准备|开始|退出|确认退出\n射击：/恶魔轮盘 操作 房间ID 版本 射击 玩家序号\n道具：/恶魔轮盘 操作 房间ID 版本 道具 槽位 [目标序号] [被偷槽位] [被偷道具目标序号]\n槽位从 1 开始；认输需再次确认。🔒 情报只私聊操作者",
+    "help": "🎲 恶魔轮盘\n引导创建：/恶魔轮盘 新建 单人|双人|多人\n直接创建：/恶魔轮盘 创建 单人|双人|多人 免费|下注金额 新手|普通|困难|专家|恶魔\n状态：/恶魔轮盘 状态\n操作：/恶魔轮盘 操作 房间ID 版本 加入|准备|开始|退出|确认退出\n射击：/恶魔轮盘 操作 房间ID 版本 射击 玩家序号\n道具：/恶魔轮盘 操作 房间ID 版本 道具 槽位 [目标序号] [被偷槽位] [被偷道具目标序号]\n槽位从 1 开始；认输需再次确认。🔒 情报只私聊操作者",
+    "setupMode": "🎲 {{mode}} · 创建对局\n\n选择对局方式\n🆓 免费：不使用积分\n🪙 积分：填写下注金额后确认",
+    "setupAmount": "🎲 {{mode}} · 积分对局\n\n🪙 每人下注 {{min}}～{{max}} 最小积分单位，仅支持正整数\n\n点击「✏️ 输入金额」，在命令末尾填写金额后发送\n也可发送：{{command}}\n\n此步骤不会扣除或冻结积分",
+    "setupDifficulty": "🎲 {{mode}} · 选择难度\n{{stake}}\n\n选择庄家难度后查看创建确认",
+    "setupBlocked": "🎲 {{mode}} · 暂不可用\n\n⚠️ {{reason}}",
+    "setupFreeDisabled": "本群未启用免费模式，请联系管理员",
+    "setupPointsDisabled": "本群未启用积分下注，请联系管理员完成配置与倍率校准后开启",
+    "setupUncalibrated": "倍率校准尚未完成，请联系管理员",
+    "setupNoPoints": "积分服务未就绪，请管理员安装并启用兼容的 Points 插件，检查服务绑定",
+    "setupPointsUnavailable": "暂时无法查询积分授权，请稍后重试；尚未扣除或冻结积分",
+    "setupUnregistered": "轮盘积分来源尚未登记，请管理员到「积分与占用」登记来源，再到 Points 授权",
+    "setupUnauthorized": "轮盘积分来源尚未获准启用，请管理员到 Points 授权",
+    "setupPermissions": "轮盘积分权限不完整，需要预留、结算、释放和续期权限，请联系管理员",
+    "setupBalancePermission": "单人积分对局还需要余额读取权限，请联系管理员",
+    "setupAmountInvalid": "⚠️ 金额无效，请填写范围内的正整数；尚未扣除或冻结积分",
+    "humanMatch": "真人对战",
+    "creationConfigChanged": "创建配置已更新，请重新选择玩法并确认",
     "lobby": "🎲 选择玩法开始对局，或发送 /恶魔轮盘 帮助",
-    "create": "🎲 {{mode}} · {{difficulty}}\n{{stake}}\n{{reward}}\n确认后锁定房间参数\n文字确认：/恶魔轮盘 确认创建 {{gameId}}",
+    "create": "🎲 {{mode}} · {{difficulty}}\n{{stake}}\n{{reward}}\n⏳ 确认有效期 10 分钟，尚未创建或扣除积分\n确认后锁定房间参数\n文字确认：/恶魔轮盘 确认创建 {{gameId}}",
     "quit": "🏳️ 确认认输？淘汰后仍按本局最终结果结算\n文字确认：/恶魔轮盘 操作 {{gameId}} {{version}} 确认退出",
     "panel": "🎲 恶魔轮盘 · {{status}}{{paused}}{{recovery}}\n房间 {{gameId}}\n{{stake}}\n\n{{timer}}\n\n{{items}}\n\n{{turn}}",
     "fallbackPlayer": "玩家{{number}}",
@@ -191,6 +207,7 @@ export const DEFAULT_REPLIES: Replies = {
 
 // 业务错误与展示文案的映射；不要改变左侧错误标识。
 export const ERROR_KEYS: Record<string, string> = {
+    "创建配置已更新，请重新选择": "creationConfigChanged",
     "入场记录已失效": "admissionExpired",
     "入场昵称查询中，请稍后重试": "nicknamePending",
     "缺少稳定事件编号": "reason0",

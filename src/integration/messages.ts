@@ -8,10 +8,9 @@ import { base } from './panel.js';
 import { ensureDatabase, readConfig } from './database.js';
 import { coordinateCreate, coordinateJoin, drain, roomFor } from './coordinator.js';
 import { preflight } from './points.js';
-import { identifier, payout } from '../config.js';
+import { identifier } from '../config.js';
 import { admissionName } from './nickname.js';
-
-export const DIFFICULTIES = ['新手', '普通', '困难', '专家', '恶魔'];
+import { chooseCreation, prepareCreate } from './creation.js';
 
 export async function operationId(session: Session): Promise<string> {
     requireRule(session.id || session.messageId, '缺少稳定事件编号');
@@ -27,23 +26,9 @@ export async function command(ctx: PluginContext, session: Session, text: string
 
     if (action === '帮助') { return renderMessage(templates, 'help'); }
 
-    if (action === '创建') {
-        await ensureDatabase(ctx);
-        const mode = ({ 单人: 'solo', 双人: 'duo', 多人: 'multi' } as Record<string, Mode>)[args[1]];
-        const stake = args[2] === '免费' ? 0 : Number(args[2]), difficulty = DIFFICULTIES.indexOf(args[3] || '普通');
-        requireRule(mode && Number.isSafeInteger(stake) && stake >= 0 && difficulty >= 0, '创建参数无效，发送 /恶魔轮盘 帮助');
+    if (action === '新建') { return chooseCreation(ctx, session, args.slice(1), templates); }
 
-        const config = await readConfig(ctx, session.targetId), gameId = crypto.randomUUID();
-        requireRule(stake ? config.values.stakesEnabled && config.values.calibrated && stake >= config.values.minStake && stake <= config.values.maxStake : config.values.freeEnabled, '模式未启用或金额超出范围');
-        requireRule(!stake || mode !== 'solo' || payout(stake, config.values.multipliers[difficulty]) <= 1e12 && payout(stake, config.values.multipliers[difficulty]) - stake <= config.values.rewardLimit, '返还或奖励超出上限');
-        const create = {
-            mode, stake, difficulty, gameId, botId: ctx.botId, groupId: session.targetId, config,
-            member: { id: session.userId, name: '', ready: true, privateId: session.userId }
-        };
-        await ctx.db.run('INSERT INTO {coord_ops}(bot,id,game_id,request,state,expires_at) VALUES(?,?,?,?,?,?)', ctx.botId, `create:${gameId}`, gameId, JSON.stringify({ input: create, expiresAt: Date.now() + 600000 }), 'CREATE_READY', Date.now() + 600000);
-
-        return renderMessage(templates, 'create', { values: { mode: mode === 'solo' ? 'Solo' : mode === 'duo' ? 'Duo' : 'Multi', stake: String(stake), difficulty: String(difficulty), reward: stake ? String(payout(stake, config.values.multipliers[difficulty])) : '', gameId }, dynamic: { confirmCreate: JSON.stringify({ create: { mode, stake, difficulty }, owner: session.userId, gameId }) } });
-    }
+    if (action === '创建') { return prepareCreate(ctx, session, args.slice(1), templates); }
 
     if (action === '确认创建') { return confirmCreate(ctx, session, args[1], templates); }
 
@@ -95,6 +80,8 @@ async function confirmCreate(ctx: PluginContext, session: Session, gameId: strin
 
     if (!prior) {
         requireRule(authorization.expiresAt > Date.now(), '创建确认已过期');
+        const current = await readConfig(ctx, session.targetId);
+        requireRule(current.globalVersion === authorized.config.globalVersion && current.groupVersion === authorized.config.groupVersion, '创建配置已更新，请重新选择');
         await preflight(ctx, [session.userId], authorized.stake);
     }
 
@@ -102,7 +89,7 @@ async function confirmCreate(ctx: PluginContext, session: Session, gameId: strin
     await coordinateCreate(ctx, create);
 
     if (create.mode === 'solo') {
-        await drain(ctx, session.targetId, session, templates);
+        await drain(ctx, session.targetId, session);
 
         return;
     }
@@ -113,7 +100,14 @@ async function confirmCreate(ctx: PluginContext, session: Session, gameId: strin
 export async function interact(ctx: PluginContext, session: Session, data: unknown, settings?: ReplyConfiguration): Promise<OutgoingMessage | void> {
     const templates = settings ?? DEFAULT_CONFIGURATION;
     requireRule(session.scene === 'group' && data && typeof data === 'object', '仅群内操作');
-    const input = data as { create?: { mode: Mode; stake: number; difficulty: number }; owner?: string; gameId: string; expectedVersion: number; action?: Request['action']; menu?: number };
+    const input = data as { setup?: unknown; create?: { mode: Mode; stake: number; difficulty: number }; owner?: string; gameId: string; expectedVersion: number; action?: Request['action']; menu?: number };
+
+    if (input.setup !== undefined) {
+        requireRule(Array.isArray(input.setup) && input.setup.length >= 2 && input.setup.length <= 4 && input.setup.every(v => typeof v === 'string' && v.length > 0 && !/\s/.test(v)) && ['新建', '创建'].includes(input.setup[0]), '创建参数无效，发送 /恶魔轮盘 帮助');
+
+        return input.setup[0] === '新建' ? chooseCreation(ctx, session, input.setup.slice(1), templates) : prepareCreate(ctx, session, input.setup.slice(1), templates);
+    }
+
     const room = roomFor(ctx, session.targetId);
 
     if (input.create) {
@@ -139,6 +133,8 @@ export async function interact(ctx: PluginContext, session: Session, data: unkno
     requireRule(input.action, '操作无效');
     let request: Request = { gameId: input.gameId, expectedVersion: input.expectedVersion, actionId, actor: session.userId, action: input.action };
 
+    let initial: Awaited<ReturnType<typeof room.work>> | undefined;
+
     if (request.action.type === 'join') {
         request = { ...request, action: { type: 'join', member: { id: session.userId, name: '', ready: false, privateId: session.userId } } };
 
@@ -155,9 +151,11 @@ export async function interact(ctx: PluginContext, session: Session, data: unkno
         const result = await room.act(request);
 
         if (result.stale) { return renderMessage(templates, 'panel', { room: result.room!, notice: 'staleAction' }); }
+
+        initial = result.work;
     }
 
-    const sent = await drain(ctx, session.targetId, session, templates);
+    const sent = await drain(ctx, session.targetId, session, initial);
     const result = sent.room!;
 
     if (request.action.type === 'confirmQuit') {

@@ -1,4 +1,15 @@
-import { ITEM_NAMES, itemPool, requireRule, secureRandom, shuffle, type Action, type Game, type GameEvent, type Item, type Mode, type Player, type RNG, type Shell } from './types.js';
+import { ITEM_NAMES, itemPool, requireRule, secureRandom, shuffle, type Action, type Game, type GameEvent, type Item, type Mode, type Player, type Knowledge, type RNG, type Shell } from './types.js';
+
+// 游戏字段固定；显式复制可变数组，避免搜索分支反复走通用结构化克隆。
+export function copyPlayer(p: Player): Player { return { ...p, inventory: p.inventory.slice() }; }
+
+export function copyKnowledge(k: Knowledge): Knowledge {
+    return { ...k, known: { ...k.known }, possibilities: k.possibilities.map(p => p.slice()) };
+}
+
+function copyGame(game: Game): Game {
+    return { ...game, players: game.players.map(copyPlayer), shells: game.shells.slice(), knowledge: Object.fromEntries(Object.entries(game.knowledge).map(([id, k]) => [id, copyKnowledge(k)])) };
+}
 
 function player(game: Game, id: string): Player {
     const value = game.players.find(p => p.id === id);
@@ -24,10 +35,12 @@ function load(game: Game, rng: RNG, events: GameEvent[]): void {
     game.saw = false;
     const amount = 2 + rng(3), pool = itemPool(game.mode);
 
+    const possibilities = arrangements(live, count - live);
+
     for (const p of game.players) {
         if (game.mode === 'solo') { p.control = 'none'; }
 
-        game.knowledge[p.id] = { loadId: game.loadId, live, blank: count - live, known: {}, possibilities: arrangements(live, count - live) };
+        game.knowledge[p.id] = { loadId: game.loadId, live, blank: count - live, known: {}, possibilities: possibilities.map(p => p.slice()) };
 
         if (p.life > 0) {
             for (let i = 0, slots = Math.min(amount, 8 - p.inventory.length); i < slots; i++) {
@@ -202,7 +215,7 @@ function useItem(game: Game, actor: Player, item: Item, target: string | undefin
 }
 
 export function applyAction(input: Game, actorId: string, action: Action, rng: RNG = secureRandom): { game: Game; events: GameEvent[] } {
-    const game = structuredClone(input), events: GameEvent[] = [];
+    const game = copyGame(input), events: GameEvent[] = [];
     requireRule(!game.finished, '对局已结束');
     const actor = player(game, actorId);
     let pass = false;
@@ -266,5 +279,5 @@ export function applyAction(input: Game, actorId: string, action: Action, rng: R
 export function publicGame(game: Game) {
     const { players, mode, current, direction, turn, loadId, saw, finished, winner } = game;
 
-    return { players: structuredClone(players), mode, current, direction, turn, loadId, saw, finished, winner };
+    return { players: players.map(copyPlayer), mode, current, direction, turn, loadId, saw, finished, winner };
 }

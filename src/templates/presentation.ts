@@ -7,6 +7,8 @@ import type { Action } from '../game/types.js';
 export interface Part { key: string; values: Record<string, string> }
 export interface MessageInput { mentionCurrent?: boolean; now?: number; values?: Record<string, string>; room?: ReturnType<typeof view>; parts?: Part[]; moves?: Action[]; offset?: number; actor?: string; dynamic?: Record<string, string>; choices?: string[]; reason?: string; name?: string; notice?: string }
 
+const variables = new WeakMap<ReplyConfiguration['replies'], Map<string, { source: string; names: string[] }>>();
+
 // 普通文字与 Markdown 共用组成规则，变量分别按发送格式处理。
 export function createReplyPresentation(render: typeof renderTemplate, escape: typeof escapeMarkdown) {
     const maxBytes = 16000;
@@ -16,7 +18,18 @@ export function createReplyPresentation(render: typeof renderTemplate, escape: t
 
         if (typeof source !== 'string') { throw Error('模板字段不存在：' + key); }
 
-        const used = [...source.matchAll(/\{\{([^{}]*)\}\}/g)].map(m => m[1]);
+        let cached = variables.get(config.replies);
+
+        if (!cached) { variables.set(config.replies, cached = new Map()); }
+
+        let entry = cached.get(key);
+
+        if (entry?.source !== source) {
+            entry = { source, names: [...source.matchAll(/\{\{([^{}]*)\}\}/g)].map(m => m[1]) };
+            cached.set(key, entry);
+        }
+
+        const used = entry.names;
 
         if (used.some(k => !Object.hasOwn(values, k))) { throw Error('缺少模板数据：' + key); }
 
@@ -56,7 +69,7 @@ export function createReplyPresentation(render: typeof renderTemplate, escape: t
             for (const item of row) {
                 if (item.action === 'choice') {
                     result.push(...choices.map((data, i) => ({ ...item, label: item.label.replaceAll('{{number}}', String(i + 1)), data })));
-                } else if (['join', 'ready', 'start', 'choose', 'quit', 'confirmCreate', 'confirmQuit', 'next', 'previous'].includes(item.action)) {
+                } else if (item.action.startsWith('draft') || ['join', 'ready', 'start', 'choose', 'quit', 'confirmCreate', 'confirmQuit', 'next', 'previous'].includes(item.action)) {
                     if (dynamic[item.action]) { result.push({ ...item, data: dynamic[item.action] }); }
                 } else { result.push({ ...item }); }
             }
@@ -71,7 +84,7 @@ export function createReplyPresentation(render: typeof renderTemplate, escape: t
         return rows;
     }
 
-    function message(config: ReplyConfiguration, key: string, input: MessageInput = {}) {
+    function message(config: ReplyConfiguration, key: string, input: MessageInput = {}, withButtons = true) {
         const values = { ...input.values }, raw: string[] = [], dynamic = { ...input.dynamic };
         let choices = input.choices ?? [];
         const t = (k: string, v: Record<string, string> = {}, r: string[] = []) => text(config, k, v, r);
@@ -88,7 +101,7 @@ export function createReplyPresentation(render: typeof renderTemplate, escape: t
             Object.assign(values, { gameId: s.gameId, version: String(s.version), status: t('status' + s.status), paused: s.paused ? t('paused') : '', recovery: s.recovery ? t('recovery') : '', stake: s.stake ? t('stake', { amount: String(s.stake) }) : t('free'), items: rows.filter(Boolean).join(config.historySeparator ?? t('playerSeparator')), timer, turn: s.game ? t('turn', { name: currentName, direction: t(s.game.direction === 1 ? 'forward' : 'reverse') }, ['name', 'direction']) : t('waiting') });
             raw.push('timer', 'status', 'paused', 'recovery', 'stake', 'items', 'turn');
 
-            for (const action of s.status === 'WAITING' ? ['join', 'ready', 'start'] : s.status === 'PLAYING' ? ['choose', 'quit'] : []) { dynamic[action] = JSON.stringify({ gameId: s.gameId, expectedVersion: s.version, ...(action === 'choose' ? { menu: 0 } : { action: { type: action === 'quit' ? 'confirmQuit' : action } }) }); }
+            if (withButtons) { for (const action of s.status === 'WAITING' ? ['join', 'ready', 'start'] : s.status === 'PLAYING' ? ['choose', 'quit'] : []) { dynamic[action] = JSON.stringify({ gameId: s.gameId, expectedVersion: s.version, ...(action === 'choose' ? { menu: 0 } : { action: { type: action === 'quit' ? 'confirmQuit' : action } }) }); } }
         } else if (key === 'menu') {
             if (input.reason === 'menuSpectator') { return { text: t('menuSpectator'), buttons: [] }; }
 
@@ -98,19 +111,35 @@ export function createReplyPresentation(render: typeof renderTemplate, escape: t
             const selected = moves.slice(offset, offset + count), players = s.game?.players ?? [];
             const player = (id: string) => players.find(p => p.id === id)!;
             values.items = selected.map((move, i) => move.type === 'shoot' ? t('menuShot', { number: String(i + 1), target: displayName(player(move.target)) }, ['target']) : move.type === 'item' ? t('menuItem', { number: String(i + 1), slot: String(move.slot + 1), item: t('item' + player(input.actor!).inventory[move.slot]), target: move.target ? t('target', { name: displayName(player(move.target)) }, ['name']) : '', stolen: move.stolenSlot !== undefined ? t('stolen', { slot: String(move.stolenSlot + 1), item: t('item' + player(move.target!).inventory[move.stolenSlot]) }, ['item']) : '', stolenTarget: move.stolenTarget ? t('stolenTarget', { name: displayName(player(move.stolenTarget)) }, ['name']) : '' }, ['item', 'target', 'stolen', 'stolenTarget']) : '').filter(Boolean).reduce((body, line, i) => body + (i ? t(selected[i].type !== selected[i - 1].type ? 'menuGroupSeparator' : 'menuSeparator') : '') + line, '');
-            values.panel = message(config, 'panel', { ...input, notice: undefined, mentionCurrent: false }).text;
+            values.panel = message(config, 'panel', { ...input, notice: undefined, mentionCurrent: false }, false).text;
             raw.push('panel', 'items');
-            choices = selected.map(move => JSON.stringify({ gameId: s.gameId, expectedVersion: s.version, action: { type: 'play', move } }));
 
-            if (offset > 0) { dynamic.previous = JSON.stringify({ gameId: s.gameId, expectedVersion: s.version, menu: Math.max(0, offset - count) }); }
+            if (withButtons) {
+                choices = selected.map(move => JSON.stringify({ gameId: s.gameId, expectedVersion: s.version, action: { type: 'play', move } }));
 
-            if (offset + count < moves.length) { dynamic.next = JSON.stringify({ gameId: s.gameId, expectedVersion: s.version, menu: offset + count }); }
+                if (offset > 0) { dynamic.previous = JSON.stringify({ gameId: s.gameId, expectedVersion: s.version, menu: Math.max(0, offset - count) }); }
+
+                if (offset + count < moves.length) { dynamic.next = JSON.stringify({ gameId: s.gameId, expectedVersion: s.version, menu: offset + count }); }
+            }
 
             if (!selected.length) { values.items = t(input.reason ?? 'menuEmpty', { name: input.name ?? '' }); }
+        } else if (key.startsWith('setup')) {
+            values.mode = t('mode' + values.mode);
+            raw.push('mode');
+
+            if (key === 'setupDifficulty') {
+                values.stake = Number(values.stake) ? t('stake', { amount: values.stake }) : t('free');
+                raw.push('stake');
+            }
+
+            if (key === 'setupBlocked') {
+                values.reason = t(input.reason!);
+                raw.push('reason');
+            }
         } else if (key === 'create') {
             const mode = values.mode;
             values.mode = t('mode' + mode);
-            values.difficulty = t('level' + values.difficulty);
+            values.difficulty = mode === 'Solo' ? t('level' + values.difficulty) : t('humanMatch');
             values.stake = Number(values.stake) ? t('stake', { amount: values.stake }) : t('free');
             values.reward = values.reward ? (mode === 'Solo' ? t('soloReward', { amount: values.reward }) : t('multiReward')) : '';
             raw.push('mode', 'difficulty', 'stake', 'reward');
@@ -118,12 +147,12 @@ export function createReplyPresentation(render: typeof renderTemplate, escape: t
             values.message = t(values.message || 'unknownError');
             raw.push('message');
         } else if (input.parts?.length) {
-            return { text: input.parts.map(p => part(config, p)).filter(Boolean).join(t('eventSeparator')), buttons: buttons(config, key, dynamic, choices) };
+            return { text: input.parts.map(p => part(config, p)).filter(Boolean).join(t('eventSeparator')), buttons: withButtons ? buttons(config, key, dynamic, choices) : [] };
         }
 
         const content = t(key, values, raw);
 
-        return { text: input.notice ? t(input.notice) + '\n' + content : content, buttons: buttons(config, key, dynamic, choices) };
+        return { text: input.notice ? t(input.notice) + '\n' + content : content, buttons: withButtons ? buttons(config, key, dynamic, choices) : [] };
     }
 
     return { message, maxBytes };

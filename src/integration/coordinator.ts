@@ -1,5 +1,3 @@
-import { DEFAULT_CONFIGURATION } from '../templates/reply-config.js';
-import type { ReplyConfiguration } from '../templates/reply-config.js';
 import type { PluginContext, Session } from '@qqbot/sdk';
 import { BuckshotRoom, BuckshotPlayerRegistry } from '../room/durable.js';
 import type { CreateInput, Request } from '../room/model.js';
@@ -102,10 +100,9 @@ export async function coordinateJoin(ctx: PluginContext, group: string, request:
     return result;
 }
 
-export async function drain(ctx: PluginContext, group: string, session?: Session, settings?: ReplyConfiguration) {
+export async function drain(ctx: PluginContext, group: string, session?: Session, initial?: Awaited<ReturnType<BuckshotRoom['work']>>) {
     const room = roomFor(ctx, group);
-    const templates = settings ?? DEFAULT_CONFIGURATION;
-    let work = await room.work(undefined, undefined, true, templates);
+    let work = initial ?? await room.work();
 
     if (!work) { return { room: null, panelHandled: false }; }
 
@@ -117,7 +114,7 @@ export async function drain(ctx: PluginContext, group: string, session?: Session
     if (work.moneyDue) {
         await processMoney(ctx, room, work);
 
-        if (!work.task) { work = await room.work(work.gameId, undefined, true, templates); }
+        if (!work.task) { work = await room.work(work.gameId, undefined, true); }
     }
 
     let panelHandled = false;
@@ -148,7 +145,7 @@ export async function drain(ctx: PluginContext, group: string, session?: Session
             if (task.panel) { panelHandled = true; }
         }
 
-        work = await room.work(work.gameId, { id: task.id, lease: task.lease!, outcome, messageId, errorCode }, i < 3 && Date.now() < deadline, templates);
+        work = await room.work(work.gameId, { id: task.id, lease: task.lease!, outcome, messageId, errorCode }, i < 3 && Date.now() < deadline);
     }
 
     if (work) {
@@ -178,15 +175,13 @@ export async function cron(ctx: PluginContext): Promise<void> {
 
     const jobs = await ctx.db.all<{ group_id: string; status: string; intent: string; revision: number }>('SELECT group_id,status,intent,revision FROM {rooms} WHERE bot=? AND due<=? ORDER BY due LIMIT 8', ctx.botId, Date.now());
 
-    const templates = DEFAULT_CONFIGURATION;
-
     for (const job of jobs) {
         if (Date.now() >= stopAt) { break; }
 
         try {
             if (job.status === 'CREATING') { await coordinateCreate(ctx, JSON.parse(job.intent) as CreateInput); }
 
-            await drain(ctx, job.group_id, undefined, templates);
+            await drain(ctx, job.group_id);
         } catch {
             await ctx.db.run('UPDATE {rooms} SET due=? WHERE bot=? AND group_id=? AND revision=? AND due IS NOT NULL', Date.now() + 60000, ctx.botId, job.group_id, job.revision);
             ctx.logger.warn('轮盘协调任务未完成', { group: job.group_id.slice(-6) });

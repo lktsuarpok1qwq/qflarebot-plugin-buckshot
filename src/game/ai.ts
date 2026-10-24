@@ -1,11 +1,11 @@
 import { chooseDemon } from './demon.js';
-import { applyAction, legalActions, publicGame } from './engine.js';
+import { applyAction, legalActions, publicGame, copyPlayer, copyKnowledge } from './engine.js';
 import { secureRandom, type Action, type Game, type Knowledge, type RNG } from './types.js';
 
 export interface AIView { public: ReturnType<typeof publicGame>; knowledge: Knowledge; cursor: number }
 
 export function observe(game: Game): AIView {
-    return { public: publicGame(game), knowledge: structuredClone(game.knowledge[game.current]), cursor: game.cursor };
+    return { public: publicGame(game), knowledge: copyKnowledge(game.knowledge[game.current]), cursor: game.cursor };
 }
 
 function score(game: Game, id: string): number {
@@ -23,8 +23,8 @@ function world(view: AIView, possibility: number): Game {
     const shells = view.knowledge.possibilities[possibility];
 
     return {
-        ...structuredClone(view.public), cursor: view.cursor, shells: [...Array(view.cursor).fill(0), ...shells], shot: false,
-        knowledge: Object.fromEntries(view.public.players.map(p => [p.id, structuredClone(view.knowledge)]))
+        ...view.public, players: view.public.players.map(copyPlayer), cursor: view.cursor, shells: [...Array(view.cursor).fill(0), ...shells], shot: false,
+        knowledge: Object.fromEntries(view.public.players.map(p => [p.id, copyKnowledge(view.knowledge)]))
     };
 }
 

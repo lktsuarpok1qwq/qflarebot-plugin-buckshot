@@ -345,8 +345,8 @@ export function view(s: RoomState) {
     return {
         gameId: s.gameId, groupId: s.groupId, version: s.version, status: s.status, mode: s.mode, stake: s.stake, difficulty: s.difficulty,
         host: s.host, members: s.members.map(({ id, name, ready }) => ({ id, name, ready })), paused: s.paused, recovery: s.recovery,
-        reason: s.reason, deadline: s.deadline, remainingMs: s.remainingMs, game: s.game ? publicGame(s.game) : undefined,
-        tasks: s.outbox.filter(t => t.state !== 'SENT').map(({ id, state, private: secret, attempts, kind, error }) => ({ id, state, secret, attempts, kind, error })),
+        ...(s.reason !== undefined ? { reason: s.reason } : {}), ...(s.deadline !== undefined ? { deadline: s.deadline } : {}), remainingMs: s.remainingMs, ...(s.game ? { game: publicGame(s.game) } : {}),
+        tasks: s.outbox.filter(t => t.state !== 'SENT').map(({ id, state, private: secret, attempts, kind, error }) => ({ id, state, secret, attempts, kind, ...(error !== undefined ? { error } : {}) })),
         funds: s.money.map(({ id, kind, state }) => ({ id, kind, state }))
     };
 }

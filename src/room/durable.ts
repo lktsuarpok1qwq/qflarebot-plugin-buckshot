@@ -1,5 +1,5 @@
 import { renderMessage } from '../templates/send.js';
-import { DEFAULT_CONFIGURATION, type ReplyConfiguration } from '../templates/reply-config.js';
+import { DEFAULT_CONFIGURATION } from '../templates/reply-config.js';
 import { PluginDurableObject } from '@qqbot/sdk';
 import { identifier, payout, validateConfig } from '../config.js';
 import { requireRule } from '../game/types.js';
@@ -11,6 +11,7 @@ import { blockClock, cancelGame, clock, mutate, playerName, startGame, tick, vie
 abstract class StoredObject extends PluginDurableObject {
     protected cache?: Map<string, unknown>;
     protected pending?: Map<string, unknown>;
+    protected encoded?: Map<string, string | undefined>;
     constructor(state: DurableObjectState, env: unknown) {
         super(state, env);
         const sql = this.ctx.storage.sql;
@@ -35,6 +36,7 @@ abstract class StoredObject extends PluginDurableObject {
         const row = this.ctx.storage.sql.exec<{ value: string }>('SELECT value FROM state WHERE id=?', id).toArray()[0];
         const value = row ? JSON.parse(row.value) as T : undefined;
         this.cache?.set(id, value);
+        this.encoded?.set(id, row?.value);
 
         return value;
     }
@@ -91,7 +93,10 @@ export class BuckshotRoom extends StoredObject {
             const result = await this.ctx.storage.transaction(async () => {
                 this.cache = new Map();
                 this.pending = new Map();
-                const before = this.read<RoomState>('room'), original = JSON.stringify(before);
+                this.encoded = new Map();
+                this.read<RoomState>('room');
+                const original = this.encoded.get('room');
+                let roomText: string | undefined;
 
                 try {
                     const result = fn();
@@ -115,18 +120,23 @@ export class BuckshotRoom extends StoredObject {
 
                         if (this.publishedSignature === JSON.stringify([state.gameId, state.status, state.indexDue])) { this.published = state.indexVersion; }
 
-                        if (JSON.stringify(state) !== original) { this.pending.set('room', state); } else { this.pending.delete('room'); }
+                        roomText = JSON.stringify(state);
+
+                        if (roomText !== original) { this.pending.set('room', state); } else { this.pending.delete('room'); }
                     }
 
                     const writes = this.pending;
                     this.pending = undefined;
 
-                    for (const [id, value] of writes) { this.write(id, value); }
+                    for (const [id, value] of writes) {
+                        this.ctx.storage.sql.exec('INSERT INTO state(id,value) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value', id, id === 'room' ? roomText! : JSON.stringify(value));
+                    }
 
                     return result;
                 } finally {
                     this.cache = undefined;
                     this.pending = undefined;
+                    this.encoded = undefined;
 
                     if (state) { await this.setWake(state, this.published < state.indexVersion); }
                 }
@@ -156,7 +166,10 @@ export class BuckshotRoom extends StoredObject {
     }
 
     private async setWake(s: RoomState, dirty: boolean): Promise<void> {
-        const local = localWake(s), due = dirty ? Math.min(local ?? Infinity, Date.now() + 60000) : local;
+        const now = Date.now(), local = localWake(s);
+        // 同一批待办共用首次到期时间，确认消息不反复将恢复 Alarm 后移几毫秒。
+        const firstDue = s.indexDue != null && s.indexDue <= now && s.indexDue + 60000 > now ? s.indexDue : now;
+        const due = dirty ? Math.min(local ?? Infinity, firstDue + 60000) : local;
         const current = await this.ctx.storage.getAlarm();
 
         if (due === null) { if (current !== null) { await this.ctx.storage.deleteAlarm(); } } else if (current !== due) { await this.ctx.storage.setAlarm(Math.max(Date.now() + 1, due)); }
@@ -243,11 +256,21 @@ export class BuckshotRoom extends StoredObject {
     }
 
     async act(request: Request) {
-        try { return { stale: false, room: await this.command(request) }; } catch (error) {
-            if (!(error instanceof Error) || error.message !== '面板已更新，请查询状态') { throw error; }
+        const result = await this.change(() => {
+            const outcome = this.execute(request);
 
-            return { stale: true, room: this.publicState() };
+            if ('error' in outcome) { return { error: outcome.error, room: view(this.state(request.gameId)) }; }
+
+            return { work: this.prepareWork(this.state(request.gameId), true) };
+        });
+
+        if (result.error) {
+            if (result.error === '面板已更新，请查询状态') { return { stale: true as const, room: result.room! }; }
+
+            throw new Error(result.error);
         }
+
+        return { stale: false as const, work: result.work! };
     }
 
     publicState() {
@@ -276,38 +299,40 @@ export class BuckshotRoom extends StoredObject {
         return true;
     }
 
-    async command(request: Request, admin = false) {
+    private execute(request: Request, admin = false) {
         identifier(request.gameId);
         identifier(request.actionId);
         identifier(request.actor);
-        const result = await this.change(() => {
-            const s = this.state(request.gameId), serialized = JSON.stringify({ request, admin });
-            const prior = this.ctx.storage.sql.exec<{ request: string; result: string }>('SELECT request,result FROM ops WHERE id=?', request.actionId).toArray()[0];
+        const s = this.state(request.gameId), serialized = JSON.stringify({ request, admin });
+        const prior = this.ctx.storage.sql.exec<{ request: string; result: string }>('SELECT request,result FROM ops WHERE id=?', request.actionId).toArray()[0];
 
-            if (prior) {
-                requireRule(prior.request === serialized, '操作编号冲突');
+        if (prior) {
+            requireRule(prior.request === serialized, '操作编号冲突');
 
-                return JSON.parse(prior.result) as ReturnType<typeof view> | { error: string };
-            }
+            return JSON.parse(prior.result) as ReturnType<typeof view> | { error: string };
+        }
 
-            let value: ReturnType<typeof view> | { error: string };
-            const unchanged = structuredClone(s);
+        let value: ReturnType<typeof view> | { error: string };
+        const unchanged = this.encoded!.get('room')!;
 
-            try {
-                requireRule(request.expectedVersion === s.version, '面板已更新，请查询状态');
-                mutate(s, request, admin, Date.now());
-                value = JSON.parse(JSON.stringify(view(s))) as ReturnType<typeof view>;
-                this.write('room', s);
-            } catch (error) {
-                this.cache!.set('room', unchanged);
-                this.pending!.delete('room');
-                value = { error: error instanceof Error ? error.message : '操作被拒绝' };
-            }
+        try {
+            requireRule(request.expectedVersion === s.version, '面板已更新，请查询状态');
+            mutate(s, request, admin, Date.now());
+            value = view(s);
+            this.write('room', s);
+        } catch (error) {
+            this.cache!.set('room', JSON.parse(unchanged));
+            this.pending!.delete('room');
+            value = { error: error instanceof Error ? error.message : '操作被拒绝' };
+        }
 
-            this.ctx.storage.sql.exec('INSERT INTO ops(id,game,request,result) VALUES(?,?,?,?)', request.actionId, s.gameId, serialized, JSON.stringify(value));
+        this.ctx.storage.sql.exec('INSERT INTO ops(id,game,request,result) VALUES(?,?,?,?)', request.actionId, s.gameId, serialized, JSON.stringify(value));
 
-            return value;
-        });
+        return value;
+    }
+
+    async command(request: Request, admin = false) {
+        const result = await this.change(() => this.execute(request, admin));
 
         if ('error' in result) { throw new Error(result.error); }
 
@@ -380,7 +405,31 @@ export class BuckshotRoom extends StoredObject {
         await this.change(() => this.ack(this.state(gameId), taskId, lease, outcome, messageId, errorCode));
     }
 
-    async work(gameId?: string, ack?: { id: string; lease: string; outcome: 'SENT' | 'FAILED' | 'UNKNOWN'; messageId?: string; errorCode?: string }, claim = true, templates: ReplyConfiguration = DEFAULT_CONFIGURATION) {
+    private prepareWork(s: RoomState, claim: boolean) {
+        tick(s, Date.now());
+        const next = s.outbox.find(t => t.state !== 'SENT' && !(!t.critical && (t.state === 'FAILED' || t.state === 'UNKNOWN')));
+        let task: Task | null = null;
+
+        if (claim && next?.state === 'PENDING') {
+            if (next.panel && !next.snapshot) { next.snapshot = view(s); }
+
+            if (next.kind === 'message' && !next.payload) { next.payload = renderMessage(DEFAULT_CONFIGURATION, next.panel ? 'panel' : next.parts![0].key, { room: next.snapshot, parts: next.parts, mentionCurrent: next.panel }); }
+
+            next.state = 'SENDING';
+            next.lease = crypto.randomUUID();
+            next.leaseUntil = Date.now() + 60000;
+            next.attempts++;
+            task = structuredClone(next);
+        }
+
+        return {
+            gameId: s.gameId, stake: s.stake, mode: s.mode, moneyDue: !!s.stake && (s.money.some(t => t.state === 'PENDING' || t.state === 'UNKNOWN' && (t.retryAt ?? 0) <= Date.now()) || s.reserved && s.status === 'PLAYING' && s.reserveUntil! - Date.now() <= 3600000), task,
+            release: canClose(s) ? s.members.filter(m => !s.released.includes(m.id)).map(m => m.id) : [], closeEmpty: canClose(s) && !s.members.length,
+            pendingReleases: s.pendingReleases ?? [], room: view(s)
+        };
+    }
+
+    async work(gameId?: string, ack?: { id: string; lease: string; outcome: 'SENT' | 'FAILED' | 'UNKNOWN'; messageId?: string; errorCode?: string }, claim = true) {
         return this.change(() => {
             const s = this.read<RoomState>('room');
 
@@ -390,27 +439,7 @@ export class BuckshotRoom extends StoredObject {
 
             if (ack) { this.ack(s, ack.id, ack.lease, ack.outcome, ack.messageId, ack.errorCode); }
 
-            tick(s, Date.now());
-            const next = s.outbox.find(t => t.state !== 'SENT' && !(!t.critical && (t.state === 'FAILED' || t.state === 'UNKNOWN')));
-            let task: Task | null = null;
-
-            if (claim && next?.state === 'PENDING') {
-                if (next.panel && !next.snapshot) { next.snapshot = structuredClone(view(s)); }
-
-                if (next.kind === 'message' && !next.payload) { next.payload = renderMessage(templates, next.panel ? 'panel' : next.parts![0].key, { room: next.snapshot, parts: next.parts, mentionCurrent: next.panel }); }
-
-                next.state = 'SENDING';
-                next.lease = crypto.randomUUID();
-                next.leaseUntil = Date.now() + 60000;
-                next.attempts++;
-                task = structuredClone(next);
-            }
-
-            return {
-                gameId: s.gameId, stake: s.stake, mode: s.mode, moneyDue: !!s.stake && (s.money.some(t => t.state === 'PENDING' || t.state === 'UNKNOWN' && (t.retryAt ?? 0) <= Date.now()) || s.reserved && s.status === 'PLAYING' && s.reserveUntil! - Date.now() <= 3600000), task,
-                release: canClose(s) ? s.members.filter(m => !s.released.includes(m.id)).map(m => m.id) : [], closeEmpty: canClose(s) && !s.members.length,
-                pendingReleases: s.pendingReleases ?? [], room: view(s)
-            };
+            return this.prepareWork(s, claim);
         });
     }
 
