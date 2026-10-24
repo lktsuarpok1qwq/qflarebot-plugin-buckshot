@@ -1,3 +1,4 @@
+import { recallLater, waitForTime } from '../templates/send.js';
 import type { PluginContext, Session } from '@qqbot/sdk';
 import { BuckshotRoom, BuckshotPlayerRegistry } from '../room/durable.js';
 import type { CreateInput, Request } from '../room/model.js';
@@ -106,7 +107,7 @@ export async function drain(ctx: PluginContext, group: string, session?: Session
     const deadline = Date.now() + 8000;
     let work = initial ?? await room.work(undefined, undefined, true, true);
 
-    if (!work) { return { room: null, panelHandled: false }; }
+    if (!work) { return { room: null, moves: [], panelHandled: false }; }
 
     for (const pending of work.pendingReleases) {
         await registryFor(ctx, pending.id).release(work.gameId, pending.claimId);
@@ -123,7 +124,14 @@ export async function drain(ctx: PluginContext, group: string, session?: Session
 
     // 前四条沿用事件凭据；连续行动余下消息使用已有的主动发送权限，给宿主返回值留一条被动额度。
 
-    for (let i = 0; work?.task && i < 24; i++) {
+    for (let i = 0; work && i < 24; i++) {
+        if (!work.task && work.resumeAt !== undefined && work.resumeAt < deadline) {
+            await waitForTime(work.resumeAt);
+            work = await room.work(work.gameId, undefined, Date.now() < deadline, true);
+        }
+
+        if (!work?.task) { break; }
+
         const task = work.task;
         let outcome: 'SENT' | 'FAILED' | 'UNKNOWN' = 'UNKNOWN', messageId: string | undefined, errorCode: string | undefined;
 
@@ -140,6 +148,8 @@ export async function drain(ctx: PluginContext, group: string, session?: Session
                 messageId = result.messageId;
                 errorCode = result.ok ? undefined : `HTTP_${result.status}:QQ_${result.code ?? 'NONE'}`;
                 outcome = result.ok && !!messageId ? 'SENT' : result.status >= 400 && result.status < 500 ? 'FAILED' : 'UNKNOWN';
+
+                if (outcome === 'SENT' && !task.private && !task.keep) { recallLater(ctx, group, messageId!, { gameId: work.gameId, taskId: task.id, loadId: task.loadId }); }
 
                 if (task.panel) { panelHandled = true; }
             }
@@ -171,7 +181,7 @@ export async function drain(ctx: PluginContext, group: string, session?: Session
         if (work.release.length || work.closeEmpty) { work = await room.work(work.gameId, undefined, false); }
     }
 
-    return { room: work?.room ?? null, panelHandled: panelHandled || !!work?.room.tasks.some(t => t.state === 'UNKNOWN' || t.state === 'FAILED' || t.state === 'SENDING') };
+    return { room: work?.room ?? null, moves: work?.moves ?? [], panelHandled: panelHandled || !!work?.room.tasks.some(t => t.state === 'UNKNOWN' || t.state === 'FAILED' || t.state === 'SENDING') };
 }
 
 export async function cron(ctx: PluginContext): Promise<void> {

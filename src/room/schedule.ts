@@ -6,7 +6,7 @@ export function canClose(s: RoomState): boolean {
 }
 
 export function localWake(s: RoomState): number | null {
-    const times = [s.status === 'WAITING' ? s.createdAt + 600000 : undefined, s.deadline, s.aiDue,
+    const times = [s.status === 'WAITING' ? s.createdAt + 600000 : undefined, s.deadline, s.aiDue, s.status === 'PLAYING' && !s.paused && !s.recovery ? s.aiReadUntil : undefined,
     s.reserved && s.status === 'PLAYING' ? s.reserveUntil : undefined,
     s.deadline && !s.reminderSent ? s.deadline - 15000 : undefined,
     ...s.outbox.filter(t => t.state === 'SENDING').map(t => t.leaseUntil),

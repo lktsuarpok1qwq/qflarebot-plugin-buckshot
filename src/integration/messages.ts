@@ -121,7 +121,7 @@ export async function interact(ctx: PluginContext, session: Session, data: unkno
         const snapshot = await room.menu(input.gameId, session.userId);
         const changed = snapshot.room.version !== input.expectedVersion;
 
-        return renderMessage(templates, 'menu', { ...snapshot, offset: changed ? 0 : input.menu, actor: session.userId, notice: changed ? 'menuRefreshed' : undefined });
+        return renderMessage(templates, 'menu', { ...snapshot, offset: changed ? 0 : input.menu, actor: session.userId });
     }
 
     const actionId = await operationId(session);
@@ -150,7 +150,7 @@ export async function interact(ctx: PluginContext, session: Session, data: unkno
 
         const result = await room.act(request);
 
-        if (result.stale) { return renderMessage(templates, 'panel', { room: result.room!, notice: 'staleAction' }); }
+        if (result.stale) { return renderMessage(templates, 'menu', { ...await room.menu(input.gameId, session.userId), actor: session.userId, notice: 'staleAction' }); }
 
         initial = result.work;
     }
@@ -160,6 +160,10 @@ export async function interact(ctx: PluginContext, session: Session, data: unkno
 
     if (request.action.type === 'confirmQuit') {
         return renderMessage(templates, 'quit', { values: { gameId: result.gameId, version: String(result.version) }, dynamic: { confirmQuit: JSON.stringify({ ...base(result), action: { type: 'quit' } }) } });
+    }
+
+    if (request.action.type === 'play' && !sent.panelHandled && result.status === 'PLAYING' && !result.paused && !result.recovery && result.game?.current === session.userId) {
+        return renderMessage(templates, 'menu', { room: result, moves: sent.moves, actor: session.userId });
     }
 
     if (!sent.panelHandled && request.action.type !== 'play' && request.action.type !== 'quit') { return renderMessage(templates, 'panel', { room: result }); }

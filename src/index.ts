@@ -1,5 +1,5 @@
 import { DEFAULT_CONFIGURATION } from './templates/reply-config.js';
-import { renderMessage } from './templates/send.js';
+import { deliver, renderMessage } from './templates/send.js';
 import { ERROR_KEYS } from './templates/replies.js';
 import type { ReplyConfiguration } from './templates/reply-config.js';
 import { definePlugin } from '@qqbot/sdk';
@@ -23,14 +23,22 @@ export default definePlugin({
         handler: async ({ ctx, session, argText }: import('@qqbot/sdk').CommandInput) => {
             const templates = DEFAULT_CONFIGURATION;
 
-            try { return await command(ctx, session, [name.slice(5), argText].filter(Boolean).join(' '), templates); } catch (error) { return failure(error, templates); }
+            let message;
+
+            try { message = await command(ctx, session, [name.slice(5), argText].filter(Boolean).join(' '), templates); } catch (error) { message = failure(error, templates); }
+
+            await deliver(ctx, session, message);
         }
     }])),
     buttons: {
         buckshot: async ({ ctx, session, buttonData }) => {
             const templates = DEFAULT_CONFIGURATION;
 
-            try { return await interact(ctx, session, JSON.parse(buttonData), templates); } catch (error) { return failure(error, templates); }
+            let message;
+
+            try { message = await interact(ctx, session, JSON.parse(buttonData), templates); } catch (error) { message = failure(error, templates); }
+
+            await deliver(ctx, session, message);
         }
     },
     events: {

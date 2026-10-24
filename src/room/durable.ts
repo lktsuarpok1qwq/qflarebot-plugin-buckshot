@@ -386,6 +386,8 @@ export class BuckshotRoom extends StoredObject {
         if (outcome === 'SENT') {
             task.sentAt = Date.now();
 
+            if (task.kind === 'message' && !task.private && task.loadId === s.game?.loadId && s.game?.players.find(p => p.id === s.game?.current)?.ai) { s.aiReadUntil = task.sentAt + 5000; }
+
             if (messageId) { task.messageId = messageId; }
         }
 
@@ -395,8 +397,8 @@ export class BuckshotRoom extends StoredObject {
             blockClock(s, Date.now());
         }
 
-        // 保留当前装填公告供首次射击撤回，其余成功消息不累计成历史战绩。
-        s.outbox = s.outbox.filter(t => t.state !== 'SENT' || t.kind === 'message' && !t.private && t.loadId === s.game?.loadId || t.kind === 'recall' && t.loadId === s.game?.loadId);
+        // 群消息清理由当前请求的 SDK waitUntil 执行，不把成功消息累积成历史。
+        s.outbox = s.outbox.filter(t => t.state !== 'SENT');
         clock(s, Date.now());
         this.write('room', s);
     }
@@ -413,7 +415,13 @@ export class BuckshotRoom extends StoredObject {
         if (claim && next?.state === 'PENDING') {
             if (next.panel && !next.snapshot) { next.snapshot = view(s); }
 
-            if (next.kind === 'message' && !next.payload) { next.payload = renderMessage(DEFAULT_CONFIGURATION, next.panel ? 'panel' : next.parts![0].key, { room: next.snapshot, parts: next.parts, mentionCurrent: next.panel }); }
+            if (next.kind === 'message' && !next.payload) {
+                const player = s.game?.players.find(p => p.id === s.game?.current);
+                const menu = next.panel && s.status === 'PLAYING' && !s.paused && !s.recovery && player && !player.ai;
+                next.keep = !!menu || !!next.panel && s.status === 'WAITING';
+                next.payload = renderMessage(DEFAULT_CONFIGURATION, menu ? 'menu' : next.panel ? 'panel' : next.parts![0].key,
+                    { room: next.snapshot, parts: next.parts, mentionCurrent: next.panel, ...(menu ? { actor: player.id, moves: legalActions(s.game!, player.id) } : {}) });
+            }
 
             next.state = 'SENDING';
             next.lease = crypto.randomUUID();
@@ -423,7 +431,8 @@ export class BuckshotRoom extends StoredObject {
         }
 
         return {
-            gameId: s.gameId, stake: s.stake, mode: s.mode, moneyDue: !!s.stake && (s.money.some(t => t.state === 'PENDING' || t.state === 'UNKNOWN' && (t.retryAt ?? 0) <= Date.now()) || s.reserved && s.status === 'PLAYING' && s.reserveUntil! - Date.now() <= 3600000), task,
+            moves: !task && s.game && s.status === 'PLAYING' && !s.paused && !s.recovery && s.deadline !== undefined && s.deadline > Date.now() && !s.game.players.find(p => p.id === s.game?.current)?.ai ? legalActions(s.game) : [],
+            gameId: s.gameId, stake: s.stake, mode: s.mode, resumeAt: !task && s.status === 'PLAYING' && !s.paused && !s.recovery ? s.aiReadUntil : undefined, moneyDue: !!s.stake && (s.money.some(t => t.state === 'PENDING' || t.state === 'UNKNOWN' && (t.retryAt ?? 0) <= Date.now()) || s.reserved && s.status === 'PLAYING' && s.reserveUntil! - Date.now() <= 3600000), task,
             release: canClose(s) ? s.members.filter(m => !s.released.includes(m.id)).map(m => m.id) : [], closeEmpty: canClose(s) && !s.members.length,
             pendingReleases: s.pendingReleases ?? [], room: view(s)
         };

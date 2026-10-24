@@ -95,7 +95,8 @@ export function createReplyPresentation(render: typeof renderTemplate, escape: t
             const s = input.room!;
             const rows = s.game ? s.game.players.map((p, i) => t('player', { number: String(i + 1), name: displayName(p), life: String(p.life), control: p.control === 'none' ? '' : t('controlled'), inventory: p.inventory.length ? p.inventory.map((item, n) => t('inventoryItem', { number: String(n + 1), item: t('item' + item) }, ['item'])).join(t('inventorySeparator')) : t('inventoryEmpty') }, ['name', 'inventory', 'control'])) : s.members.map(p => t('member', { name: displayName(p), ready: t(p.ready ? 'ready' : 'notReady') }, ['name', 'ready']));
             const seconds = String(Math.ceil(Math.max(0, s.deadline === undefined ? s.remainingMs : s.deadline - (input.now ?? Date.now())) / 1000));
-            const timer = s.status !== 'PLAYING' ? t(s.game ? 'timerEnded' : 'timerWaiting') : t(s.paused || s.recovery ? 'timerPaused' : 'timer', { seconds });
+            const reading = Math.max(0, (s.aiReadUntil ?? 0) - (input.now ?? Date.now()));
+            const timer = reading && s.status === 'PLAYING' && !s.paused && !s.recovery ? t('timerReading', { seconds: String(Math.ceil(reading / 1000)) }) : s.status !== 'PLAYING' ? t(s.game ? 'timerEnded' : 'timerWaiting') : t(s.paused || s.recovery ? 'timerPaused' : 'timer', { seconds });
             const current = s.game?.players.find(p => p.id === s.game!.current);
             const currentName = current ? input.mentionCurrent && !current.ai && s.status === 'PLAYING' && !s.paused && !s.recovery ? qqAt(current.id) : escape(current.name) : '';
             Object.assign(values, { gameId: s.gameId, version: String(s.version), status: t('status' + s.status), paused: s.paused ? t('paused') : '', recovery: s.recovery ? t('recovery') : '', stake: s.stake ? t('stake', { amount: String(s.stake) }) : t('free'), items: rows.filter(Boolean).join(config.historySeparator ?? t('playerSeparator')), timer, turn: s.game ? t('turn', { name: currentName, direction: t(s.game.direction === 1 ? 'forward' : 'reverse') }, ['name', 'direction']) : t('waiting') });
@@ -111,7 +112,7 @@ export function createReplyPresentation(render: typeof renderTemplate, escape: t
             const selected = moves.slice(offset, offset + count), players = s.game?.players ?? [];
             const player = (id: string) => players.find(p => p.id === id)!;
             values.items = selected.map((move, i) => move.type === 'shoot' ? t('menuShot', { number: String(i + 1), target: displayName(player(move.target)) }, ['target']) : move.type === 'item' ? t('menuItem', { number: String(i + 1), slot: String(move.slot + 1), item: t('item' + player(input.actor!).inventory[move.slot]), target: move.target ? t('target', { name: displayName(player(move.target)) }, ['name']) : '', stolen: move.stolenSlot !== undefined ? t('stolen', { slot: String(move.stolenSlot + 1), item: t('item' + player(move.target!).inventory[move.stolenSlot]) }, ['item']) : '', stolenTarget: move.stolenTarget ? t('stolenTarget', { name: displayName(player(move.stolenTarget)) }, ['name']) : '' }, ['item', 'target', 'stolen', 'stolenTarget']) : '').filter(Boolean).reduce((body, line, i) => body + (i ? t(selected[i].type !== selected[i - 1].type ? 'menuGroupSeparator' : 'menuSeparator') : '') + line, '');
-            values.panel = message(config, 'panel', { ...input, notice: undefined, mentionCurrent: false }, false).text;
+            values.panel = message(config, 'panel', { ...input, notice: undefined, mentionCurrent: input.mentionCurrent ?? false }, false).text;
             raw.push('panel', 'items');
 
             if (withButtons) {

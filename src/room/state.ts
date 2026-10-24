@@ -37,7 +37,9 @@ export function blockClock(s: RoomState, now: number): void {
 }
 
 export function clock(s: RoomState, now: number): void {
-    if (s.status !== 'PLAYING' || s.paused || s.recovery || s.outbox.some(t => t.critical && t.state !== 'SENT')) {
+    if (s.aiReadUntil !== undefined && s.aiReadUntil <= now) { s.aiReadUntil = undefined; }
+
+    if (s.status !== 'PLAYING' || s.paused || s.recovery || s.aiReadUntil !== undefined || s.outbox.some(t => t.critical && t.state !== 'SENT')) {
         blockClock(s, now);
 
         return;
@@ -73,17 +75,6 @@ export function events(s: RoomState, values: GameEvent[], oldTurn: number, now: 
             summary.push(event.message!);
         } else {
             enqueue(s, event.text, event.type === 'load' || event.type === 'finish', undefined, event.type === 'load' ? event.loadId : undefined).parts = [event.message!];
-        }
-
-        if (event.type === 'shot') {
-            const announcement = s.outbox.find(t => t.kind === 'message' && t.loadId === event.loadId && !t.private);
-
-            if (announcement?.messageId && !s.outbox.some(t => t.kind === 'recall' && t.loadId === event.loadId)) {
-                const task = enqueue(s, '', false, undefined, event.loadId);
-                task.kind = 'recall';
-                task.messageId = announcement.messageId;
-                task.announcementSentAt = announcement.sentAt;
-            }
         }
     }
 
@@ -346,7 +337,7 @@ export function view(s: RoomState) {
     return {
         gameId: s.gameId, groupId: s.groupId, version: s.version, status: s.status, mode: s.mode, stake: s.stake, difficulty: s.difficulty,
         host: s.host, members: s.members.map(({ id, name, ready }) => ({ id, name, ready })), paused: s.paused, recovery: s.recovery,
-        ...(s.reason !== undefined ? { reason: s.reason } : {}), ...(s.deadline !== undefined ? { deadline: s.deadline } : {}), remainingMs: s.remainingMs, ...(s.game ? { game: publicGame(s.game) } : {}),
+        ...(s.reason !== undefined ? { reason: s.reason } : {}), ...(s.deadline !== undefined ? { deadline: s.deadline } : {}), remainingMs: s.remainingMs, ...(s.aiReadUntil !== undefined ? { aiReadUntil: s.aiReadUntil } : {}), ...(s.game ? { game: publicGame(s.game) } : {}),
         tasks: s.outbox.filter(t => t.state !== 'SENT').map(({ id, state, private: secret, attempts, kind, error }) => ({ id, state, secret, attempts, kind, ...(error !== undefined ? { error } : {}) })),
         funds: s.money.map(({ id, kind, state }) => ({ id, kind, state }))
     };
