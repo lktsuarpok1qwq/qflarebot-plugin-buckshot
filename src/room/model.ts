@@ -8,7 +8,7 @@ export interface Task {
     id: string; seq: number; kind: 'message' | 'recall'; target: string; private: boolean;
     parts?: import('../templates/presentation.js').Part[]; payload?: import('@qqbot/sdk').OutgoingMessage; text: string; critical: boolean; loadId?: number; panel?: boolean; messageId?: string;
     state: 'PENDING' | 'SENDING' | 'SENT' | 'UNKNOWN' | 'FAILED'; lease?: string; leaseUntil?: number; attempts: number;
-    error?: string; sentAt?: number; expiresAt?: number; plain?: boolean; snapshot?: ReturnType<typeof import('./state.js').view>;
+    error?: string; announcementSentAt?: number; sentAt?: number; expiresAt?: number; plain?: boolean; snapshot?: ReturnType<typeof import('./state.js').view>;
 }
 export interface MoneyTask {
     id: string; kind: 'reserve' | 'settle' | 'release' | 'renew'; input: Parameters<PointsService['reserveBundle']>[0] | Parameters<PointsService['settle']>[0] | Parameters<PointsService['release']>[0] | Parameters<PointsService['renewReservation']>[0];

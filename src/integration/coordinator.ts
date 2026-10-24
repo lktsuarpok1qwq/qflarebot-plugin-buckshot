@@ -102,7 +102,9 @@ export async function coordinateJoin(ctx: PluginContext, group: string, request:
 
 export async function drain(ctx: PluginContext, group: string, session?: Session, initial?: Awaited<ReturnType<BuckshotRoom['work']>>) {
     const room = roomFor(ctx, group);
-    let work = initial ?? await room.work();
+    // SDK 一次发送最多占用约 20 秒；8 秒后不再领取新任务，给宿主生命周期留出余量。
+    const deadline = Date.now() + 8000;
+    let work = initial ?? await room.work(undefined, undefined, true, true);
 
     if (!work) { return { room: null, panelHandled: false }; }
 
@@ -114,24 +116,26 @@ export async function drain(ctx: PluginContext, group: string, session?: Session
     if (work.moneyDue) {
         await processMoney(ctx, room, work);
 
-        if (!work.task) { work = await room.work(work.gameId, undefined, true); }
+        if (!work.task) { work = await room.work(work.gameId, undefined, Date.now() < deadline, true); }
     }
 
-    let panelHandled = false;
-    const deadline = Date.now() + 12000;
+    let panelHandled = false, passiveReplies = 0;
 
-    for (let i = 0; work?.task && i < 4; i++) {
+    // 前四条沿用事件凭据；连续行动余下消息使用已有的主动发送权限，给宿主返回值留一条被动额度。
+
+    for (let i = 0; work?.task && i < 24; i++) {
         const task = work.task;
         let outcome: 'SENT' | 'FAILED' | 'UNKNOWN' = 'UNKNOWN', messageId: string | undefined, errorCode: string | undefined;
 
         try {
             if (task.kind === 'recall') {
                 const ok = session?.scene === 'group' && session.targetId === group ? await session.recall(task.messageId) : await ctx.api.recallMessage({ scene: 'group', id: group }, task.messageId!);
-                outcome = ok ? 'SENT' : 'FAILED';
+                outcome = ok ? 'SENT' : 'UNKNOWN';
+                errorCode = ok ? undefined : 'RECALL_NOT_CONFIRMED:SDK_FALSE';
             } else {
                 const rendered = task.payload!;
                 const message = task.plain && typeof rendered !== 'string' ? rendered.text ?? task.text : rendered;
-                const result = !task.private && session?.scene === 'group' && session.targetId === group && session.canReply
+                const result = !task.private && session?.scene === 'group' && session.targetId === group && session.canReply && passiveReplies++ < 4
                     ? await session.reply(message) : await ctx.api.sendMessage({ scene: task.private ? 'c2c' : 'group', id: task.target }, message);
                 messageId = result.messageId;
                 errorCode = result.ok ? undefined : `HTTP_${result.status}:QQ_${result.code ?? 'NONE'}`;
@@ -141,11 +145,19 @@ export async function drain(ctx: PluginContext, group: string, session?: Session
             }
         } catch {
             outcome = 'UNKNOWN';
+            errorCode = task.kind === 'recall' ? 'RECALL_EXCEPTION:RESULT_UNKNOWN' : 'SEND_EXCEPTION:RESULT_UNKNOWN';
 
             if (task.panel) { panelHandled = true; }
         }
 
-        work = await room.work(work.gameId, { id: task.id, lease: task.lease!, outcome, messageId, errorCode }, i < 3 && Date.now() < deadline);
+        if (task.kind === 'recall' && outcome !== 'SENT') {
+            ctx.logger.warn('装填公告撤回未确认', {
+                gameId: work.gameId, taskId: task.id, loadId: task.loadId, attempts: task.attempts,
+                code: errorCode, announcementAgeMs: task.announcementSentAt === undefined ? null : Math.max(0, Date.now() - task.announcementSentAt)
+            });
+        }
+
+        work = await room.work(work.gameId, { id: task.id, lease: task.lease!, outcome, messageId, errorCode }, i < 23 && Date.now() < deadline, true);
     }
 
     if (work) {

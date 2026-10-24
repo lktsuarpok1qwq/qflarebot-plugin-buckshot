@@ -261,7 +261,7 @@ export class BuckshotRoom extends StoredObject {
 
             if ('error' in outcome) { return { error: outcome.error, room: view(this.state(request.gameId)) }; }
 
-            return { work: this.prepareWork(this.state(request.gameId), true) };
+            return { work: this.prepareWork(this.state(request.gameId), true, request.action.type !== 'confirmQuit') };
         });
 
         if (result.error) {
@@ -405,8 +405,8 @@ export class BuckshotRoom extends StoredObject {
         await this.change(() => this.ack(this.state(gameId), taskId, lease, outcome, messageId, errorCode));
     }
 
-    private prepareWork(s: RoomState, claim: boolean) {
-        tick(s, Date.now());
+    private prepareWork(s: RoomState, claim: boolean, immediateAI = false) {
+        tick(s, Date.now(), immediateAI);
         const next = s.outbox.find(t => t.state !== 'SENT' && !(!t.critical && (t.state === 'FAILED' || t.state === 'UNKNOWN')));
         let task: Task | null = null;
 
@@ -429,7 +429,7 @@ export class BuckshotRoom extends StoredObject {
         };
     }
 
-    async work(gameId?: string, ack?: { id: string; lease: string; outcome: 'SENT' | 'FAILED' | 'UNKNOWN'; messageId?: string; errorCode?: string }, claim = true) {
+    async work(gameId?: string, ack?: { id: string; lease: string; outcome: 'SENT' | 'FAILED' | 'UNKNOWN'; messageId?: string; errorCode?: string }, claim = true, immediateAI = false) {
         return this.change(() => {
             const s = this.read<RoomState>('room');
 
@@ -439,7 +439,7 @@ export class BuckshotRoom extends StoredObject {
 
             if (ack) { this.ack(s, ack.id, ack.lease, ack.outcome, ack.messageId, ack.errorCode); }
 
-            return this.prepareWork(s, claim);
+            return this.prepareWork(s, claim, claim && immediateAI && (!ack || ack.outcome === 'SENT'));
         });
     }
 

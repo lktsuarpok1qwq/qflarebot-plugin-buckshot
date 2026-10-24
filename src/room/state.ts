@@ -82,6 +82,7 @@ export function events(s: RoomState, values: GameEvent[], oldTurn: number, now: 
                 const task = enqueue(s, '', false, undefined, event.loadId);
                 task.kind = 'recall';
                 task.messageId = announcement.messageId;
+                task.announcementSentAt = announcement.sentAt;
             }
         }
     }
@@ -285,7 +286,7 @@ export function mutate(s: RoomState, request: Request, admin: boolean, now: numb
     clock(s, now);
 }
 
-export function tick(s: RoomState, now: number): void {
+export function tick(s: RoomState, now: number, immediateAI = false): void {
     for (const task of s.outbox) {
         if (task.state === 'PENDING' && task.expiresAt !== undefined && task.expiresAt <= now) { task.state = 'FAILED'; }
 
@@ -324,7 +325,7 @@ export function tick(s: RoomState, now: number): void {
         s.game = result.game;
         s.version++;
         events(s, result.events, oldTurn, now, oldCurrent);
-    } else if (s.aiDue !== undefined && s.aiDue <= now) {
+    } else if (s.aiDue !== undefined && (immediateAI || s.aiDue <= now)) {
         let move;
 
         try { move = chooseAction(observe(game), s.difficulty, undefined, s.config.values.aiBudgetMs); } catch { move = { type: 'shoot' as const, target: game.players.find(p => p.life > 0 && p.id !== game.current)!.id }; }

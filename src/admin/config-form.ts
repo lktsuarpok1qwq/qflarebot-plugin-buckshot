@@ -1,7 +1,7 @@
 import { parseMultiplier } from './multipliers.js';
 
 export const configForm = 'const parseMultiplier = ' + parseMultiplier.toString() + ';\n' + String.raw`
-const fields = [['freeEnabled', '免费模式', 'boolean'], ['stakesEnabled', '积分下注', 'boolean'], ['calibrated', '倍率已校准', 'boolean'], ['turnSeconds', '操作时间（秒）', 'number'], ['aiDelaySeconds', 'AI 展示间隔（秒）', 'number'], ['aiBudgetMs', 'AI 搜索预算（毫秒）', 'number'], ['minStake', '最小下注（最小单位）', 'number'], ['maxStake', '最大下注（最小单位）', 'number'], ['rewardLimit', '奖励上限（最小单位）', 'number'], ['multipliers', '五档倍率（1～10 倍，最多 3 位小数）', 'multipliers']];
+const fields = [['freeEnabled', '免费模式', 'boolean'], ['stakesEnabled', '积分下注', 'boolean'], ['calibrated', '倍率已校准', 'boolean'], ['turnSeconds', '操作时间（秒）', 'number'], ['aiDelaySeconds', 'AI 中断恢复延迟（秒）', 'number'], ['aiBudgetMs', 'AI 搜索预算（毫秒）', 'number'], ['minStake', '最小下注（最小单位）', 'number'], ['maxStake', '最大下注（最小单位）', 'number'], ['rewardLimit', '奖励上限（最小单位）', 'number'], ['multipliers', '五档倍率（1～10 倍，最多 3 位小数）', 'multipliers']];
 let configEpoch = 0, configBusy = false, loaded = null, baseline = '', pending = null;
 const drafts = new Map();
 

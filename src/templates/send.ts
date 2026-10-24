@@ -9,7 +9,10 @@ export function renderMessage(config: ReplyConfiguration, key: string, input: Me
     input = { ...input, now: input.now ?? Date.now() };
     const result = replyPresentation.message(config, key, input);
 
-    if (new TextEncoder().encode(result.text).length > replyPresentation.maxBytes || !result.text.trim()) { throw Error('消息展开后的正文为空或超出上限'); }
+    // QQ 会折叠空白行并把行首编号解析为列表；传输层保留可见排版，纯文本不带控制字符。
+    const markdown = result.text.replace(/^(\d+)\. /gm, '$1\\. ').replace(/^$/gm, '\u200b');
+
+    if (new TextEncoder().encode(markdown).length > replyPresentation.maxBytes || !result.text.trim()) { throw Error('消息展开后的正文为空或超出上限'); }
 
     if (result.buttons.length > 5 || result.buttons.some(row => row.length > 5 || row.some(b => [...b.label].length > 10))) { throw Error('消息按钮超出上限'); }
 
@@ -26,5 +29,5 @@ export function renderMessage(config: ReplyConfiguration, key: string, input: Me
 
     const plain = plainPresentation.message(config, key, input, false).text;
 
-    return { text: plain, markdown: { content: result.text }, ...(rows.length ? { keyboard: keyboard(rows) } : {}) };
+    return { text: plain, markdown: { content: markdown }, ...(rows.length ? { keyboard: keyboard(rows) } : {}) };
 }
