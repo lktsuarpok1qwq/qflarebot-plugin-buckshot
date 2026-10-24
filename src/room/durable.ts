@@ -7,6 +7,7 @@ import { legalActions } from '../game/engine.js';
 import type { CreateInput, MoneyTask, PanelReceipt, Request, RoomState, Task } from './model.js';
 import { localWake, workDue, canClose } from './schedule.js';
 import { blockClock, cancelGame, clock, mutate, playerName, startGame, tick, view } from './state.js';
+import { cleanName, type AdmissionName, type CachedName } from './names.js';
 
 abstract class StoredObject extends PluginDurableObject {
     protected cache?: Map<string, unknown>;
@@ -53,13 +54,45 @@ abstract class StoredObject extends PluginDurableObject {
     }
 }
 export class BuckshotPlayerRegistry extends StoredObject {
-    claim(input: { botId: string; userId: string; gameId: string; groupId: string; claimId?: string }): void {
+    claim(input: { botId: string; userId: string; gameId: string; groupId: string; claimId?: string }, eventName?: string): AdmissionName {
         Object.values(input).forEach(identifier);
-        this.ctx.storage.transactionSync(() => {
+
+        return this.ctx.storage.transactionSync(() => {
             const old = this.read<typeof input>('owner');
             requireRule(!old || JSON.stringify(old) === JSON.stringify(input), '你已在其他房间或等待安全关闭');
 
             if (!old) { this.write('owner', input); }
+
+            if (eventName === undefined) { return { value: '' }; }
+
+            const names = this.read<CachedName[]>('names') ?? [];
+            const cached = names.find(n => n.group === input.groupId), now = Date.now();
+
+            if (cached && cached.nextLookup > now && (cached.value || !cleanName(eventName))) { return { value: cached.value }; }
+
+            const value = cached?.value || cleanName(eventName);
+            const token = cached?.value || !value ? crypto.randomUUID() : undefined;
+            const next: CachedName = { group: input.groupId, value, nextLookup: now + (token ? 30000 : 86400000), ...(token ? { token } : {}) };
+            this.write('names', [...names.filter(n => n.group !== input.groupId).slice(-7), next]);
+
+            return { value, ...(token ? { token } : {}) };
+        });
+    }
+
+    finishName(group: string, token: string, value: string): string | null {
+        return this.ctx.storage.transactionSync(() => {
+            const names = this.read<CachedName[]>('names') ?? [];
+            const cached = names.find(n => n.group === group);
+
+            if (!cached || cached.token !== token) { return null; }
+
+            const fresh = cleanName(value);
+            cached.value = fresh || cached.value;
+            cached.nextLookup = Date.now() + (fresh ? 86400000 : 300000);
+            delete cached.token;
+            this.write('names', names);
+
+            return cached.value;
         });
     }
 
@@ -177,7 +210,7 @@ export class BuckshotRoom extends StoredObject {
 
     async refreshSchedule(): Promise<void> { await this.change(() => { }); }
 
-    async create(input: CreateInput) {
+    async create(input: CreateInput, name?: string) {
         identifier(input.gameId);
         identifier(input.botId);
         identifier(input.groupId);
@@ -203,7 +236,7 @@ export class BuckshotRoom extends StoredObject {
             requireRule(!this.read(`closed:${input.gameId}`), '创建编号已关闭');
             const s: RoomState = {
                 ...input, schemaVersion: 2, host: input.member.id, version: 1, status: 'WAITING', createdAt: Date.now(),
-                members: [{ ...input.member, name: playerName(input.member.name, []) }], paused: false, recovery: false, remainingMs: cfg.turnSeconds * 1000, reminderSent: false,
+                members: [{ ...input.member, name: playerName(cleanName(name ?? input.member.name), []) }], paused: false, recovery: false, remainingMs: cfg.turnSeconds * 1000, reminderSent: false,
                 outbox: [], seq: 0, money: [], reserved: false, renewal: 0, released: [], confirmations: {}, indexVersion: 0
             };
             this.write('room', s);
@@ -214,6 +247,27 @@ export class BuckshotRoom extends StoredObject {
     }
 
     isClosed(gameId: string): boolean { return !!this.read(`closed:${gameId}`); }
+
+    async updateName(gameId: string, actor: string, claimId: string, name: string): Promise<void> {
+        const value = cleanName(name);
+
+        if (!value) { return; }
+
+        await this.change(() => {
+            const s = this.read<RoomState>('room');
+
+            if (!s || s.gameId !== gameId || !['WAITING', 'PREPARING', 'PLAYING'].includes(s.status)) { return; }
+
+            const member = s.members.find(m => m.id === actor && (m.claimId ?? s.gameId) === claimId);
+
+            if (!member || member.name === value) { return; }
+
+            member.name = value;
+            const player = s.game?.players.find(p => p.id === actor);
+
+            if (player) { player.name = value; }
+        });
+    }
 
     async abandonCreation(gameId: string): Promise<void> {
         await this.change(() => {
@@ -242,7 +296,6 @@ export class BuckshotRoom extends StoredObject {
         identifier(gameId);
         identifier(actor);
         const s = this.state(gameId), room = view(s), player = s.game?.players.find(p => p.id === actor);
-        const current = s.game?.players.find(p => p.id === s.game?.current);
         const reason = !s.members.some(m => m.id === actor) ? 'menuSpectator'
             : ['FINISHED', 'SETTLED', 'CANCELLED', 'CLOSED'].includes(s.status) || s.game?.finished ? 'menuEnded'
                 : s.recovery ? 'menuRecovery' : s.paused ? 'menuPaused'
@@ -252,7 +305,7 @@ export class BuckshotRoom extends StoredObject {
                                 : s.outbox.some(t => t.critical && t.state !== 'SENT') ? 'menuBusy'
                                     : s.deadline === undefined || s.deadline <= Date.now() ? 'menuExpired' : undefined;
 
-        return { room, moves: reason || !s.game ? [] : legalActions(s.game, actor), reason, name: current?.name };
+        return { room, moves: reason || !s.game ? [] : legalActions(s.game, actor), reason, name: player?.name ?? s.members.find(m => m.id === actor)?.name };
     }
 
     async act(request: Request) {
@@ -265,7 +318,7 @@ export class BuckshotRoom extends StoredObject {
         });
 
         if (result.error) {
-            if (result.error === '面板已更新，请查询状态') { return { stale: true as const, room: result.room! }; }
+            if (result.error === '面板已更新，请查询状态' || result.error === '未轮到你行动') { return { stale: true as const, notice: result.error === '面板已更新，请查询状态' ? 'staleAction' : undefined, room: result.room! }; }
 
             throw new Error(result.error);
         }
@@ -299,7 +352,7 @@ export class BuckshotRoom extends StoredObject {
         return true;
     }
 
-    private execute(request: Request, admin = false) {
+    private execute(request: Request, admin = false, name?: string) {
         identifier(request.gameId);
         identifier(request.actionId);
         identifier(request.actor);
@@ -316,8 +369,10 @@ export class BuckshotRoom extends StoredObject {
         const unchanged = this.encoded!.get('room')!;
 
         try {
-            requireRule(request.expectedVersion === s.version, '面板已更新，请查询状态');
-            mutate(s, request, admin, Date.now());
+            const joining = request.action.type === 'join' && s.status === 'WAITING' && Number.isSafeInteger(request.expectedVersion) && request.expectedVersion > 0 && request.expectedVersion <= s.version;
+            requireRule(joining || request.expectedVersion === s.version, '面板已更新，请查询状态');
+            const action = request.action.type === 'join' && name !== undefined ? { ...request.action, member: { ...request.action.member, name: cleanName(name) } } : request.action;
+            mutate(s, { ...request, action }, admin, Date.now());
             value = view(s);
             this.write('room', s);
         } catch (error) {
@@ -331,8 +386,8 @@ export class BuckshotRoom extends StoredObject {
         return value;
     }
 
-    async command(request: Request, admin = false) {
-        const result = await this.change(() => this.execute(request, admin));
+    async command(request: Request, admin = false, name?: string) {
+        const result = await this.change(() => this.execute(request, admin, name));
 
         if ('error' in result) { throw new Error(result.error); }
 

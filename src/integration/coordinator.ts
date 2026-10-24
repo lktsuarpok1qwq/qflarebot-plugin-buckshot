@@ -5,7 +5,8 @@ import type { CreateInput, Request } from '../room/model.js';
 import { identifier, payout, validateConfig } from '../config.js';
 import { requireRule } from '../game/types.js';
 import { processMoney } from './points.js';
-import { admissionName, type NicknameSnapshot } from './nickname.js';
+import { refreshName } from './nickname.js';
+import type { AdmissionName } from '../room/names.js';
 
 export function roomFor(ctx: PluginContext, group: string) {
     identifier(group);
@@ -17,7 +18,7 @@ export function registryFor(ctx: PluginContext, user: string) {
     return ctx.durable.get<BuckshotPlayerRegistry>('BuckshotPlayerRegistry', `${ctx.botId}:${user}`);
 }
 
-export async function coordinateCreate(ctx: PluginContext, input: CreateInput) {
+export async function coordinateCreate(ctx: PluginContext, input: CreateInput, eventName = input.member.name) {
     const room = roomFor(ctx, input.groupId), serialized = JSON.stringify(input);
     requireRule(!await room.isClosed(input.gameId), '创建编号已关闭');
     [input.botId, input.groupId, input.gameId, input.member.id, input.member.privateId].forEach(identifier);
@@ -31,8 +32,11 @@ export async function coordinateCreate(ctx: PluginContext, input: CreateInput) {
     const saved = await ctx.db.first<{ game: string; intent: string }>('SELECT game,intent FROM {rooms} WHERE bot=? AND group_id=?', ctx.botId, input.groupId);
     requireRule(saved?.game === input.gameId && saved.intent === serialized, '本群已有房间或创建编号冲突');
 
+    const registry = registryFor(ctx, input.member.id);
+    let name: AdmissionName;
+
     try {
-        await registryFor(ctx, input.member.id).claim({ botId: ctx.botId, userId: input.member.id, gameId: input.gameId, groupId: input.groupId, claimId: input.gameId });
+        name = await registry.claim({ botId: ctx.botId, userId: input.member.id, gameId: input.gameId, groupId: input.groupId, claimId: input.gameId }, eventName);
     } catch (error) {
         const actual = await registryFor(ctx, input.member.id).owner();
 
@@ -44,7 +48,8 @@ export async function coordinateCreate(ctx: PluginContext, input: CreateInput) {
         throw error;
     }
 
-    const result = await room.create(input);
+    const result = await room.create(input, name.value);
+    refreshName(ctx, room, registry, { gameId: input.gameId, groupId: input.groupId, userId: input.member.id, claimId: input.gameId }, name);
     await ctx.db.run('UPDATE {coord_ops} SET state=? WHERE bot=? AND game_id=? AND id=?', 'CREATE_ACCEPTED', ctx.botId, input.gameId, `create:${input.gameId}`);
 
     if (input.mode === 'solo') {
@@ -54,17 +59,35 @@ export async function coordinateCreate(ctx: PluginContext, input: CreateInput) {
     return result;
 }
 
-export async function coordinateJoin(ctx: PluginContext, group: string, request: Request) {
+export async function coordinateJoin(ctx: PluginContext, group: string, request: Request, eventName = '') {
+    const started = Date.now();
     request = { ...request, action: request.action.type === 'join' ? { ...request.action, member: { ...request.action.member, claimId: request.actionId } } : request.action };
     const serialized = JSON.stringify({ group, request });
-    await ctx.db.run('INSERT OR IGNORE INTO {coord_ops}(bot,id,game_id,request,state) VALUES(?,?,?,?,?)', ctx.botId, request.actionId, request.gameId, serialized, 'PENDING');
+    const inserted = await ctx.db.run('INSERT OR IGNORE INTO {coord_ops}(bot,id,game_id,request,state) VALUES(?,?,?,?,?)', ctx.botId, request.actionId, request.gameId, serialized, 'PENDING');
     const prior = await ctx.db.first<{ request: string; state: string }>('SELECT request,state FROM {coord_ops} WHERE bot=? AND game_id=? AND id=?', ctx.botId, request.gameId, request.actionId);
-    const saved = prior ? JSON.parse(prior.request) as { group: string; request: Request } & NicknameSnapshot : null;
+    const saved = prior ? JSON.parse(prior.request) as { group: string; request: Request } : null;
     requireRule(prior && saved && JSON.stringify({ group: saved.group, request: saved.request }) === serialized, '加入编号冲突');
     requireRule(prior.state !== 'REJECTED', '该加入请求已拒绝，请查询状态后重新加入');
+    const room = roomFor(ctx, group);
+
+    // 已接受的原请求只返回状态，不能在离场后重新取得玩家占用。
+    if (prior.state === 'DONE') { return room.publicState(); }
+
+    if (!inserted.changes) {
+        const accepted = await room.operation(request.gameId, request.actionId);
+
+        if (accepted && !accepted.error) {
+            await ctx.db.run('UPDATE {coord_ops} SET state=? WHERE bot=? AND game_id=? AND id=?', 'DONE', ctx.botId, request.gameId, request.actionId);
+
+            return room.publicState();
+        }
+    }
+
+    const registry = registryFor(ctx, request.actor);
+    let name: AdmissionName;
 
     try {
-        await registryFor(ctx, request.actor).claim({ botId: ctx.botId, userId: request.actor, gameId: request.gameId, groupId: group, claimId: request.actionId });
+        name = await registry.claim({ botId: ctx.botId, userId: request.actor, gameId: request.gameId, groupId: group, claimId: request.actionId }, eventName);
     } catch (error) {
         const owner = await registryFor(ctx, request.actor).owner();
 
@@ -75,15 +98,11 @@ export async function coordinateJoin(ctx: PluginContext, group: string, request:
         throw error;
     }
 
-    if (request.action.type === 'join') {
-        const name = await admissionName(ctx, request.gameId, request.actionId, group, request.actor, saved);
-        request = { ...request, action: { ...request.action, member: { ...request.action.member, name } } };
-    }
-
-    const room = roomFor(ctx, group);
     let result;
 
-    try { result = await room.command(request); } catch (error) {
+    const admittedAt = Date.now();
+
+    try { result = await room.command(request, false, name.value); } catch (error) {
         // 只有 Room 已持久化拒绝、且玩家未入房时才能补偿占用；未知结果留待恢复。
         const op = await room.operation(request.gameId, request.actionId);
         const state = await room.publicState();
@@ -96,7 +115,11 @@ export async function coordinateJoin(ctx: PluginContext, group: string, request:
         throw error;
     }
 
+    const roomMs = Date.now() - admittedAt;
+    refreshName(ctx, room, registry, { gameId: request.gameId, groupId: group, userId: request.actor, claimId: request.actionId }, name);
     await ctx.db.run('UPDATE {coord_ops} SET state=? WHERE bot=? AND game_id=? AND id=?', 'DONE', ctx.botId, request.gameId, request.actionId);
+
+    ctx.logger.debug('加入房间耗时', { coordinationMs: admittedAt - started, roomMs, totalMs: Date.now() - started });
 
     return result;
 }

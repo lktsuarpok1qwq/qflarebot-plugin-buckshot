@@ -76,7 +76,9 @@ export function recallLater(ctx: PluginContext, group: string, messageId: string
 export async function deliver(ctx: PluginContext, session: Session, message: OutgoingMessage | void): Promise<void> {
     if (!message) { return; }
 
+    const started = Date.now();
     const result = await session.reply(message);
+    ctx.logger.debug('回复消息耗时', { elapsedMs: Date.now() - started, ok: result.ok });
 
     if (session.scene !== 'group' || !result.ok || !result.messageId) { return; }
 

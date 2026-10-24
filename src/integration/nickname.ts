@@ -1,46 +1,28 @@
 import type { PluginContext } from '@qqbot/sdk';
-import { requireRule } from '../game/types.js';
+import type { BuckshotPlayerRegistry, BuckshotRoom } from '../room/durable.js';
+import { cleanName, type AdmissionName } from '../room/names.js';
 
-interface Lookup { started: number; value?: string }
-export interface NicknameSnapshot { nickname?: Lookup }
+// 入场先完成；昵称只补充展示，不改变操作版本、时钟或资金身份，也不另发面板。
+export function refreshName(ctx: PluginContext, room: DurableObjectStub<BuckshotRoom>, registry: DurableObjectStub<BuckshotPlayerRegistry>, input: { gameId: string; groupId: string; userId: string; claimId: string }, name: AdmissionName): void {
+    if (!name.token) { return; }
 
-// 复用入场协调记录领取一次查询；请求中断后使用默认名，不重新请求 QQ。
-export async function admissionName(ctx: PluginContext, gameId: string, id: string, group: string, user: string, saved: NicknameSnapshot): Promise<string> {
-    const key = [ctx.botId, gameId, id];
-    let lookup = saved.nickname;
-
-    if (!lookup) {
+    const token = name.token;
+    ctx.waitUntil((async () => {
         const started = Date.now();
-        const claim = await ctx.db.run("UPDATE {coord_ops} SET request=json_set(request,'$.nickname',json(?)) WHERE bot=? AND game_id=? AND id=? AND json_type(request,'$.nickname') IS NULL", JSON.stringify({ started }), ...key);
+        let value = '', outcome = 'empty';
 
-        if (claim.changes) {
-            let value = '';
-
+        try {
             try {
-                const member = await ctx.api.group.member(group, user);
+                const member = await ctx.api.group.member(input.groupId, input.userId);
+                value = member?.member_openid === input.userId ? cleanName(member.username) : '';
+                outcome = value ? 'found' : 'empty';
+            } catch { outcome = 'unavailable'; }
 
-                if (member.member_openid === user && typeof member.username === 'string') { value = member.username.replace(/[\r\n<>\[\](){}`]/g, '').trim().slice(0, 24); }
-            } catch {
-                // 权限、限流及网络错误均只影响展示名，不影响入场或资金身份。
-            }
+            const saved = await registry.finishName(input.groupId, token, value);
 
-            const stored = await ctx.db.run("UPDATE {coord_ops} SET request=json_set(request,'$.nickname.value',?) WHERE bot=? AND game_id=? AND id=? AND json_extract(request,'$.nickname.started')=? AND json_type(request,'$.nickname.value') IS NULL", value, ...key, started);
+            if (saved) { await room.updateName(input.gameId, input.userId, input.claimId, saved); }
+        } catch { outcome = 'save_failed'; }
 
-            if (stored.changes) { return value; }
-        }
-
-        const row = await ctx.db.first<{ request: string }>('SELECT request FROM {coord_ops} WHERE bot=? AND game_id=? AND id=?', ...key);
-        lookup = row ? (JSON.parse(row.request) as { nickname?: Lookup }).nickname : undefined;
-    }
-
-    requireRule(lookup, '入场记录已失效');
-
-    if (lookup.value !== undefined) { return lookup.value; }
-
-    requireRule(Date.now() - lookup.started >= 30000, '入场昵称查询中，请稍后重试');
-    await ctx.db.run("UPDATE {coord_ops} SET request=json_set(request,'$.nickname.value','') WHERE bot=? AND game_id=? AND id=? AND json_type(request,'$.nickname.value') IS NULL", ...key);
-    const row = await ctx.db.first<{ request: string }>('SELECT request FROM {coord_ops} WHERE bot=? AND game_id=? AND id=?', ...key);
-    requireRule(row, '入场记录已失效');
-
-    return (JSON.parse(row.request) as { nickname: Lookup }).nickname.value!;
+        ctx.logger.debug('入场昵称后台补充', { outcome, elapsedMs: Date.now() - started });
+    })());
 }

@@ -9,7 +9,6 @@ import { ensureDatabase, readConfig } from './database.js';
 import { coordinateCreate, coordinateJoin, drain, roomFor } from './coordinator.js';
 import { preflight } from './points.js';
 import { identifier } from '../config.js';
-import { admissionName } from './nickname.js';
 import { chooseCreation, prepareCreate } from './creation.js';
 
 export async function operationId(session: Session): Promise<string> {
@@ -85,8 +84,8 @@ async function confirmCreate(ctx: PluginContext, session: Session, gameId: strin
         await preflight(ctx, [session.userId], authorized.stake);
     }
 
-    const create = prior ?? { ...authorized, member: { ...authorized.member, name: await admissionName(ctx, gameId, `create:${gameId}`, session.targetId, session.userId, JSON.parse(issued.request)) } };
-    await coordinateCreate(ctx, create);
+    const create = prior ?? authorized;
+    await coordinateCreate(ctx, create, session.userName);
 
     if (create.mode === 'solo') {
         await drain(ctx, session.targetId, session);
@@ -140,7 +139,7 @@ export async function interact(ctx: PluginContext, session: Session, data: unkno
 
         if (!await room.operation(input.gameId, actionId)) { await preflight(ctx, [session.userId], current!.stake); }
 
-        try { await coordinateJoin(ctx, session.targetId, request); } catch (error) {
+        try { await coordinateJoin(ctx, session.targetId, request, session.userName); } catch (error) {
             if (!(error instanceof Error) || error.message !== '面板已更新，请查询状态') { throw error; }
 
             return renderMessage(templates, 'panel', { room: (await room.publicState())!, notice: 'staleAction' });
@@ -150,7 +149,7 @@ export async function interact(ctx: PluginContext, session: Session, data: unkno
 
         const result = await room.act(request);
 
-        if (result.stale) { return renderMessage(templates, 'menu', { ...await room.menu(input.gameId, session.userId), actor: session.userId, notice: 'staleAction' }); }
+        if (result.stale) { return renderMessage(templates, 'menu', { ...await room.menu(input.gameId, session.userId), actor: session.userId, notice: result.notice }); }
 
         initial = result.work;
     }

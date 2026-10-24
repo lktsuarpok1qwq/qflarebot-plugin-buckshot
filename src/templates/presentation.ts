@@ -89,7 +89,7 @@ export function createReplyPresentation(render: typeof renderTemplate, escape: t
         let choices = input.choices ?? [];
         const t = (k: string, v: Record<string, string> = {}, r: string[] = []) => text(config, k, v, r);
 
-        const displayName = (p: { name: string; ai?: boolean }) => t(p.ai ? 'dealerName' : 'humanName', { name: p.name });
+        const displayName = (p: { id?: string; name: string; ai?: boolean; life?: number }) => t(p.ai ? 'dealerName' : p.life === 0 ? 'eliminatedName' : input.room?.mode !== 'solo' && input.room?.status === 'PLAYING' && p.id === input.room.game?.current ? 'activeName' : 'humanName', { name: p.name });
 
         if (key === 'panel') {
             const s = input.room!;
@@ -104,7 +104,7 @@ export function createReplyPresentation(render: typeof renderTemplate, escape: t
 
             if (withButtons) { for (const action of s.status === 'WAITING' ? ['join', 'ready', 'start'] : s.status === 'PLAYING' ? ['choose', 'quit'] : []) { dynamic[action] = JSON.stringify({ gameId: s.gameId, expectedVersion: s.version, ...(action === 'choose' ? { menu: 0 } : { action: { type: action === 'quit' ? 'confirmQuit' : action } }) }); } }
         } else if (key === 'menu') {
-            if (input.reason === 'menuSpectator') { return { text: t('menuSpectator'), buttons: [] }; }
+            if (input.reason === 'menuSpectator' || input.reason === 'menuOtherTurn') { return { text: t(input.reason, { name: input.name ?? '' }), buttons: [] }; }
 
             const s = input.room!, moves = input.moves ?? [], requested = input.offset ?? 0;
             const offset = requested < moves.length ? requested : 0;
