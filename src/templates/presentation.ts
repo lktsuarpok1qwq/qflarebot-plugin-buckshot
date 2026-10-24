@@ -108,7 +108,9 @@ export function createReplyPresentation(render: typeof renderTemplate, escape: t
 
             const s = input.room!, moves = input.moves ?? [], requested = input.offset ?? 0;
             const offset = requested < moves.length ? requested : 0;
-            const count = moves.length <= 25 ? 25 : 23;
+            const canQuit = !input.reason && s.status === 'PLAYING' && !s.paused && !s.recovery && s.game?.players.some(p => p.id === input.actor && !p.ai && p.life > 0);
+            const capacity = canQuit ? 24 : 25;
+            const count = moves.length <= capacity ? capacity : capacity - 2;
             const selected = moves.slice(offset, offset + count), players = s.game?.players ?? [];
             const player = (id: string) => players.find(p => p.id === id)!;
             values.items = selected.map((move, i) => move.type === 'shoot' ? t('menuShot', { number: String(i + 1), target: displayName(player(move.target)) }, ['target']) : move.type === 'item' ? t('menuItem', { number: String(i + 1), slot: String(move.slot + 1), item: t('item' + player(input.actor!).inventory[move.slot]), target: move.target ? t('target', { name: displayName(player(move.target)) }, ['name']) : '', stolen: move.stolenSlot !== undefined ? t('stolen', { slot: String(move.stolenSlot + 1), item: t('item' + player(move.target!).inventory[move.stolenSlot]) }, ['item']) : '', stolenTarget: move.stolenTarget ? t('stolenTarget', { name: displayName(player(move.stolenTarget)) }, ['name']) : '' }, ['item', 'target', 'stolen', 'stolenTarget']) : '').filter(Boolean).reduce((body, line, i) => body + (i ? t(selected[i].type !== selected[i - 1].type ? 'menuGroupSeparator' : 'menuSeparator') : '') + line, '');
@@ -117,6 +119,8 @@ export function createReplyPresentation(render: typeof renderTemplate, escape: t
 
             if (withButtons) {
                 choices = selected.map(move => JSON.stringify({ gameId: s.gameId, expectedVersion: s.version, action: { type: 'play', move } }));
+
+                if (canQuit) { dynamic.quit = JSON.stringify({ gameId: s.gameId, expectedVersion: s.version, action: { type: 'confirmQuit' } }); }
 
                 if (offset > 0) { dynamic.previous = JSON.stringify({ gameId: s.gameId, expectedVersion: s.version, menu: Math.max(0, offset - count) }); }
 

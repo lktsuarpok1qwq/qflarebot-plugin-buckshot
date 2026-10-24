@@ -1,9 +1,17 @@
 import { button, keyboard, type OutgoingMessage, type PluginContext, type Session } from '@qqbot/sdk';
+import type { BuckshotRoom } from '../room/durable.js';
+import type { PanelReference } from '../room/model.js';
+import { DEFAULTS } from '../config.js';
+import { readConfig } from '../integration/database.js';
 import type { ReplyConfiguration } from './reply-config.js';
 import { createReplyPresentation, replyPresentation, type MessageInput } from './presentation.js';
 import { renderTemplate } from './replies.js';
 
 const persistent = new WeakSet<object>();
+const panels = new WeakMap<object, PanelReference>();
+const recallDelays = new WeakMap<object, number>();
+
+export function panelReference(message: OutgoingMessage): PanelReference | undefined { return typeof message === 'object' && message !== null ? panels.get(message) : undefined; }
 
 export function keepMessage(message: OutgoingMessage): boolean { return typeof message === 'object' && message !== null && persistent.has(message); }
 
@@ -35,7 +43,14 @@ export function renderMessage(config: ReplyConfiguration, key: string, input: Me
 
     const outgoing = { text: plain, markdown: { content: markdown }, ...(rows.length ? { keyboard: keyboard(rows) } : {}) };
 
+    if (input.room?.recallSeconds !== undefined) { recallDelays.set(outgoing, input.room.recallSeconds); }
+
     if ((key === 'menu' && rows.length > 0) || ['lobby', 'create', 'quit'].includes(key) || key.startsWith('setup') || key === 'panel' && input.room?.status === 'WAITING') { persistent.add(outgoing); }
+
+    if (input.room && (key === 'panel' || key === 'menu' && !input.reason)) {
+        panels.set(outgoing, { gameId: input.room.gameId, version: input.room.version, status: input.room.status, order: String(Date.now()).padStart(16, '0') + ':' + crypto.randomUUID() });
+        persistent.add(outgoing);
+    }
 
     return outgoing;
 }
@@ -44,10 +59,10 @@ export async function waitForTime(time: number): Promise<void> {
     while (Date.now() < time) { await new Promise(resolve => setTimeout(resolve, time - Date.now())); }
 }
 
-export function recallLater(ctx: PluginContext, group: string, messageId: string, details: { gameId?: string; taskId?: string; loadId?: number } = {}): void {
+export function recallLater(ctx: PluginContext, group: string, messageId: string, details: { gameId?: string; taskId?: string; loadId?: number } = {}, seconds = DEFAULTS.recallSeconds): void {
     const sentAt = Date.now();
     ctx.waitUntil((async () => {
-        await waitForTime(sentAt + 5000);
+        await waitForTime(sentAt + seconds * 1000);
         let code: string | undefined;
 
         try {
@@ -63,5 +78,23 @@ export async function deliver(ctx: PluginContext, session: Session, message: Out
 
     const result = await session.reply(message);
 
-    if (session.scene === 'group' && !keepMessage(message) && result.ok && result.messageId) { recallLater(ctx, session.targetId, result.messageId); }
+    if (session.scene !== 'group' || !result.ok || !result.messageId) { return; }
+
+    const panel = panelReference(message);
+    let seconds = typeof message === 'object' ? recallDelays.get(message) : undefined;
+
+    if (seconds === undefined && (panel || !keepMessage(message))) {
+        try { seconds = (await readConfig(ctx, session.targetId)).values.recallSeconds; } catch {
+            ctx.logger.warn('撤回配置读取失败，使用默认等待时间', { code: 'RECALL_CONFIG_UNAVAILABLE' });
+        }
+    }
+
+    if (panel) {
+        try {
+            const room = ctx.durable.get<BuckshotRoom>('BuckshotRoom', `${ctx.botId}:${session.targetId}`);
+            const previous = await room.panelSent({ ...panel, messageId: result.messageId });
+
+            for (const id of previous) { recallLater(ctx, session.targetId, id, { gameId: panel.gameId }, seconds); }
+        } catch { ctx.logger.warn('面板回执保存未确认', { gameId: panel.gameId, code: 'PANEL_RECEIPT_UNKNOWN' }); }
+    } else if (!keepMessage(message)) { recallLater(ctx, session.targetId, result.messageId, {}, seconds); }
 }

@@ -1,7 +1,7 @@
 import { parseMultiplier } from './multipliers.js';
 
 export const configForm = 'const parseMultiplier = ' + parseMultiplier.toString() + ';\n' + String.raw`
-const fields = [['freeEnabled', '免费模式', 'boolean'], ['stakesEnabled', '积分下注', 'boolean'], ['calibrated', '倍率已校准', 'boolean'], ['turnSeconds', '操作时间（秒）', 'number'], ['aiDelaySeconds', 'AI 中断恢复延迟（秒）', 'number'], ['aiBudgetMs', 'AI 搜索预算（毫秒）', 'number'], ['minStake', '最小下注（最小单位）', 'number'], ['maxStake', '最大下注（最小单位）', 'number'], ['rewardLimit', '奖励上限（最小单位）', 'number'], ['multipliers', '五档倍率（1～10 倍，最多 3 位小数）', 'multipliers']];
+const fields = [['freeEnabled', '免费模式', 'boolean'], ['stakesEnabled', '积分下注', 'boolean'], ['calibrated', '倍率已校准', 'boolean'], ['turnSeconds', '操作时间（秒）', 'number'], ['recallSeconds', '自动撤回等待（秒，1～20）', 'number'], ['aiDelaySeconds', 'AI 中断恢复延迟（秒）', 'number'], ['aiBudgetMs', 'AI 搜索预算（毫秒）', 'number'], ['minStake', '最小下注（最小单位）', 'number'], ['maxStake', '最大下注（最小单位）', 'number'], ['rewardLimit', '奖励上限（最小单位）', 'number'], ['multipliers', '五档倍率（1～10 倍，最多 3 位小数）', 'multipliers']];
 let configEpoch = 0, configBusy = false, loaded = null, baseline = '', pending = null;
 const drafts = new Map();
 
@@ -12,7 +12,7 @@ function validateValues(value) {
         if (typeof value[key] !== 'boolean') { throw new Error('开关格式无效'); }
     }
 
-    for (const [key, min, max] of [['turnSeconds', 20, 300], ['aiDelaySeconds', 1, 3], ['aiBudgetMs', 1, 8], ['minStake', 1, 1e12], ['maxStake', 1, 2.5e11], ['rewardLimit', 0, 1e12]]) {
+    for (const [key, min, max] of [['turnSeconds', 20, 300], ['recallSeconds', 1, 20], ['aiDelaySeconds', 1, 3], ['aiBudgetMs', 1, 8], ['minStake', 1, 1e12], ['maxStake', 1, 2.5e11], ['rewardLimit', 0, 1e12]]) {
         if (!Number.isSafeInteger(value[key]) || value[key] < min || value[key] > max) {
             const error = new Error(fields.find(field => field[0] === key)[1] + '须为 ' + min + '～' + max + ' 的整数');
             error.field = key;
@@ -112,6 +112,12 @@ function loadForm(result) {
                 e.append(label);
             }
         } else { e.type = type === 'boolean' ? 'checkbox' : 'number'; }
+
+        if (key === 'recallSeconds') {
+            e.min = '1';
+            e.max = '20';
+            e.step = '1';
+        }
 
         e.setAttribute('aria-describedby', 'configErrors');
         e.oninput = () => {

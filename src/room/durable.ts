@@ -1,10 +1,10 @@
-import { renderMessage } from '../templates/send.js';
+import { panelReference, renderMessage } from '../templates/send.js';
 import { DEFAULT_CONFIGURATION } from '../templates/reply-config.js';
 import { PluginDurableObject } from '@qqbot/sdk';
 import { identifier, payout, validateConfig } from '../config.js';
 import { requireRule } from '../game/types.js';
 import { legalActions } from '../game/engine.js';
-import type { CreateInput, MoneyTask, Request, RoomState, Task } from './model.js';
+import type { CreateInput, MoneyTask, PanelReceipt, Request, RoomState, Task } from './model.js';
 import { localWake, workDue, canClose } from './schedule.js';
 import { blockClock, cancelGame, clock, mutate, playerName, startGame, tick, view } from './state.js';
 
@@ -376,7 +376,36 @@ export class BuckshotRoom extends StoredObject {
         return result;
     }
 
-    private ack(s: RoomState, taskId: string, lease: string, outcome: 'SENT' | 'FAILED' | 'UNKNOWN', messageId?: string, errorCode?: string): void {
+    private rememberPanel(s: RoomState | undefined, receipt: PanelReceipt): string[] {
+        const old = this.read<PanelReceipt>('panel');
+
+        if (old?.messageId === receipt.messageId) { return []; }
+
+        if (!s || s.gameId !== receipt.gameId || old?.gameId === receipt.gameId && (old.version > receipt.version || old.version === receipt.version && old.order >= receipt.order)) { return [receipt.messageId]; }
+
+        if (['FINISHED', 'SETTLING', 'SETTLED', 'CANCELLED', 'CLOSED'].includes(s.status) && receipt.version < s.version) { return [receipt.messageId]; }
+
+        this.write('panel', receipt);
+
+        return old?.messageId ? [old.messageId] : [];
+    }
+
+    async panelSent(receipt: PanelReceipt): Promise<string[]> {
+        return this.change(() => this.rememberPanel(this.read<RoomState>('room'), receipt));
+    }
+
+    private retirePanel(s: RoomState): string[] {
+        const old = this.read<PanelReceipt>('panel');
+
+        if (!old?.messageId || old.gameId !== s.gameId || !['WAITING', 'PREPARING', 'PLAYING'].includes(old.status)) { return []; }
+
+        this.write('panel', { ...old, version: s.version, messageId: '' });
+
+        return [old.messageId];
+    }
+
+    private ack(s: RoomState, taskId: string, lease: string, outcome: 'SENT' | 'FAILED' | 'UNKNOWN', messageId?: string, errorCode?: string): string[] {
+        const discarded: string[] = [];
         const task = s.outbox.find(t => t.id === taskId);
         requireRule(task?.state === 'SENDING' && task.lease === lease && task.leaseUntil! > Date.now(), '投递租约已失效');
         requireRule(outcome !== 'SENT' || task.kind === 'recall' || !!messageId, '缺少消息回执');
@@ -389,6 +418,10 @@ export class BuckshotRoom extends StoredObject {
             if (task.kind === 'message' && !task.private && task.loadId === s.game?.loadId && s.game?.players.find(p => p.id === s.game?.current)?.ai) { s.aiReadUntil = task.sentAt + 5000; }
 
             if (messageId) { task.messageId = messageId; }
+
+            if (task.panel && task.snapshot && task.panelOrder) {
+                discarded.push(...this.rememberPanel(s, { gameId: s.gameId, version: task.snapshot.version, status: task.snapshot.status, order: task.panelOrder, messageId: messageId! }));
+            } else if (['FINISHED', 'SETTLING', 'SETTLED', 'CANCELLED', 'CLOSED'].includes(s.status)) { discarded.push(...this.retirePanel(s)); }
         }
 
         if (outcome !== 'SENT' && task.critical) {
@@ -401,6 +434,8 @@ export class BuckshotRoom extends StoredObject {
         s.outbox = s.outbox.filter(t => t.state !== 'SENT');
         clock(s, Date.now());
         this.write('room', s);
+
+        return discarded;
     }
 
     async acknowledge(gameId: string, taskId: string, lease: string, outcome: 'SENT' | 'FAILED' | 'UNKNOWN', messageId?: string, errorCode?: string): Promise<void> {
@@ -418,9 +453,10 @@ export class BuckshotRoom extends StoredObject {
             if (next.kind === 'message' && !next.payload) {
                 const player = s.game?.players.find(p => p.id === s.game?.current);
                 const menu = next.panel && s.status === 'PLAYING' && !s.paused && !s.recovery && player && !player.ai;
-                next.keep = !!menu || !!next.panel && s.status === 'WAITING';
+                next.keep = !!next.panel;
                 next.payload = renderMessage(DEFAULT_CONFIGURATION, menu ? 'menu' : next.panel ? 'panel' : next.parts![0].key,
                     { room: next.snapshot, parts: next.parts, mentionCurrent: next.panel, ...(menu ? { actor: player.id, moves: legalActions(s.game!, player.id) } : {}) });
+                next.panelOrder = panelReference(next.payload)?.order;
             }
 
             next.state = 'SENDING';
@@ -431,7 +467,7 @@ export class BuckshotRoom extends StoredObject {
         }
 
         return {
-            moves: !task && s.game && s.status === 'PLAYING' && !s.paused && !s.recovery && s.deadline !== undefined && s.deadline > Date.now() && !s.game.players.find(p => p.id === s.game?.current)?.ai ? legalActions(s.game) : [],
+            recallSeconds: s.config.values.recallSeconds, discardPanels: [] as string[], moves: !task && s.game && s.status === 'PLAYING' && !s.paused && !s.recovery && s.deadline !== undefined && s.deadline > Date.now() && !s.game.players.find(p => p.id === s.game?.current)?.ai ? legalActions(s.game) : [],
             gameId: s.gameId, stake: s.stake, mode: s.mode, resumeAt: !task && s.status === 'PLAYING' && !s.paused && !s.recovery ? s.aiReadUntil : undefined, moneyDue: !!s.stake && (s.money.some(t => t.state === 'PENDING' || t.state === 'UNKNOWN' && (t.retryAt ?? 0) <= Date.now()) || s.reserved && s.status === 'PLAYING' && s.reserveUntil! - Date.now() <= 3600000), task,
             release: canClose(s) ? s.members.filter(m => !s.released.includes(m.id)).map(m => m.id) : [], closeEmpty: canClose(s) && !s.members.length,
             pendingReleases: s.pendingReleases ?? [], room: view(s)
@@ -446,9 +482,9 @@ export class BuckshotRoom extends StoredObject {
 
             requireRule(!gameId || s.gameId === gameId, '房间已失效');
 
-            if (ack) { this.ack(s, ack.id, ack.lease, ack.outcome, ack.messageId, ack.errorCode); }
+            const discardPanels = ack ? this.ack(s, ack.id, ack.lease, ack.outcome, ack.messageId, ack.errorCode) : [];
 
-            return this.prepareWork(s, claim, claim && immediateAI && (!ack || ack.outcome === 'SENT'));
+            return { ...this.prepareWork(s, claim, claim && immediateAI && (!ack || ack.outcome === 'SENT')), discardPanels };
         });
     }
 

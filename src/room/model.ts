@@ -4,11 +4,13 @@ import type { Action, Game, Mode } from '../game/types.js';
 
 export type Status = 'WAITING' | 'PREPARING' | 'PLAYING' | 'FINISHED' | 'SETTLING' | 'SETTLED' | 'CLOSED' | 'CANCELLED';
 export interface Member { id: string; name: string; ready: boolean; privateId: string; claimId?: string }
+export interface PanelReference { gameId: string; version: number; status: Status; order: string }
+export interface PanelReceipt extends PanelReference { messageId: string }
 export interface Task {
     id: string; seq: number; kind: 'message' | 'recall'; target: string; private: boolean;
     parts?: import('../templates/presentation.js').Part[]; payload?: import('@qqbot/sdk').OutgoingMessage; text: string; critical: boolean; loadId?: number; panel?: boolean; messageId?: string;
     state: 'PENDING' | 'SENDING' | 'SENT' | 'UNKNOWN' | 'FAILED'; lease?: string; leaseUntil?: number; attempts: number;
-    keep?: boolean; error?: string; announcementSentAt?: number; sentAt?: number; expiresAt?: number; plain?: boolean; snapshot?: ReturnType<typeof import('./state.js').view>;
+    panelOrder?: string; keep?: boolean; error?: string; announcementSentAt?: number; sentAt?: number; expiresAt?: number; plain?: boolean; snapshot?: ReturnType<typeof import('./state.js').view>;
 }
 export interface MoneyTask {
     id: string; kind: 'reserve' | 'settle' | 'release' | 'renew'; input: Parameters<PointsService['reserveBundle']>[0] | Parameters<PointsService['settle']>[0] | Parameters<PointsService['release']>[0] | Parameters<PointsService['renewReservation']>[0];

@@ -149,7 +149,7 @@ export async function drain(ctx: PluginContext, group: string, session?: Session
                 errorCode = result.ok ? undefined : `HTTP_${result.status}:QQ_${result.code ?? 'NONE'}`;
                 outcome = result.ok && !!messageId ? 'SENT' : result.status >= 400 && result.status < 500 ? 'FAILED' : 'UNKNOWN';
 
-                if (outcome === 'SENT' && !task.private && !task.keep) { recallLater(ctx, group, messageId!, { gameId: work.gameId, taskId: task.id, loadId: task.loadId }); }
+                if (outcome === 'SENT' && !task.private && !task.keep) { recallLater(ctx, group, messageId!, { gameId: work.gameId, taskId: task.id, loadId: task.loadId }, work.recallSeconds); }
 
                 if (task.panel) { panelHandled = true; }
             }
@@ -168,6 +168,8 @@ export async function drain(ctx: PluginContext, group: string, session?: Session
         }
 
         work = await room.work(work.gameId, { id: task.id, lease: task.lease!, outcome, messageId, errorCode }, i < 23 && Date.now() < deadline, true);
+
+        for (const id of work?.discardPanels ?? []) { recallLater(ctx, group, id, { gameId: work!.gameId }, work!.recallSeconds); }
     }
 
     if (work) {
