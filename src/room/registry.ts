@@ -1,0 +1,115 @@
+import { StoredObject } from './storage.js';
+import { challengeSeed } from '../game/random.js';
+import { PlayerHistory, type PlayerReplay } from '../replay/history.js';
+import { identifier } from '../config.js';
+import { requireRule } from '../game/types.js';
+import { isPrivateScope } from '../conversation.js';
+import { cleanName, type AdmissionName, type CachedName } from './names.js';
+
+export class BuckshotPlayerRegistry extends StoredObject {
+    private history: PlayerHistory;
+
+    constructor(state: DurableObjectState, env: unknown) {
+        super(state, env, PlayerHistory.schema);
+        this.history = new PlayerHistory(state.storage.sql);
+    }
+
+    async dailyChallenge(date: string, userId: string) {
+        identifier(userId);
+        requireRule(/^\d{4}-\d{2}-\d{2}$/.test(date), '每日挑战参数无效');
+        const secret = this.ctx.storage.transactionSync(() => {
+            const saved = this.read<number[]>('challenge-secret');
+
+            if (saved) { return saved; }
+
+            const value = [...crypto.getRandomValues(new Uint8Array(32))];
+            this.write('challenge-secret', value);
+
+            return value;
+        });
+
+        return challengeSeed(secret, date, userId);
+    }
+
+    replayHistory(before?: number) { return this.history.list(before); }
+
+    statistics() { return this.history.statistics(); }
+
+    claim(input: { botId: string; userId: string; gameId: string; groupId: string; claimId?: string }, eventName?: string): AdmissionName {
+        Object.values(input).forEach(identifier);
+
+        return this.ctx.storage.transactionSync(() => {
+            const old = this.read<typeof input>('owner');
+            requireRule(!old || JSON.stringify(old) === JSON.stringify(input), '你已在其他房间或等待安全关闭');
+
+            if (!old) { this.write('owner', input); }
+
+            return this.admissionName(input.groupId, eventName);
+        });
+    }
+
+    private admissionName(group: string, eventName?: string): AdmissionName {
+        if (eventName === undefined) { return { value: '' }; }
+
+        const names = this.read<CachedName[]>('names') ?? [];
+        const cached = names.find(n => n.group === group), now = Date.now();
+
+        if (cached && cached.nextLookup > now && (cached.value || !cleanName(eventName))) { return { value: cached.value, nextLookup: cached.nextLookup }; }
+
+        const value = cached?.value || cleanName(eventName);
+        const token = !isPrivateScope(group) && (cached?.value || !value) ? crypto.randomUUID() : undefined;
+        const next: CachedName = { group: group, value, nextLookup: now + (token ? 30000 : value ? 86400000 : 300000), ...(token ? { token } : {}) };
+        this.write('names', [...names.filter(n => n.group !== group).slice(-7), next]);
+
+        return { value, nextLookup: next.nextLookup, ...(token ? { token } : {}) };
+    }
+
+    rememberPrivateName(userId: string, eventName: string): void {
+        identifier(userId);
+        const group = `c2c:${userId}`;
+        identifier(group);
+
+        if (cleanName(eventName)) { this.ctx.storage.transactionSync(() => this.admissionName(group, eventName)); }
+    }
+
+    nameForOwner(input: { botId: string; userId: string; gameId: string; groupId: string; claimId: string }, eventName: string): AdmissionName | null {
+        return this.ctx.storage.transactionSync(() => {
+            const owner = this.owner();
+
+            if (!owner || owner.gameId !== input.gameId || owner.groupId !== input.groupId || (owner.claimId ?? owner.gameId) !== input.claimId) { return null; }
+
+            return this.admissionName(input.groupId, eventName);
+        });
+    }
+
+    finishName(group: string, token: string, value: string): string | null {
+        return this.ctx.storage.transactionSync(() => {
+            const names = this.read<CachedName[]>('names') ?? [];
+            const cached = names.find(n => n.group === group);
+
+            if (!cached || cached.token !== token) { return null; }
+
+            const fresh = cleanName(value);
+            cached.value = fresh || cached.value;
+            cached.nextLookup = Date.now() + (fresh ? 86400000 : 300000);
+            delete cached.token;
+            this.write('names', names);
+
+            return cached.value;
+        });
+    }
+
+    owner() { return this.read<{ botId: string; userId: string; gameId: string; groupId: string; claimId?: string }>('owner') ?? null; }
+
+    release(gameId: string, claimId?: string, replay?: PlayerReplay): void {
+        this.ctx.storage.transactionSync(() => {
+            const owner = this.owner();
+
+            if (owner?.gameId === gameId && (!claimId || owner.claimId === claimId)) {
+                if (replay) { this.history.record(gameId, replay); }
+
+                this.ctx.storage.sql.exec('DELETE FROM state WHERE id=?', 'owner');
+            }
+        });
+    }
+}

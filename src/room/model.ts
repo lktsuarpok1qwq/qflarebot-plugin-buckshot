@@ -3,7 +3,7 @@ import type { ConfigSnapshot } from '../config.js';
 import type { Action, Game, Mode } from '../game/types.js';
 
 export type Status = 'WAITING' | 'PREPARING' | 'PLAYING' | 'FINISHED' | 'SETTLING' | 'SETTLED' | 'CLOSED' | 'CANCELLED';
-export interface Member { id: string; name: string; ready: boolean; privateId: string; claimId?: string }
+export interface Member { id: string; name: string; ready: boolean; privateId: string; claimId?: string; nameLookupAt?: number }
 export interface PanelReference { gameId: string; version: number; status: Status; order: string }
 export interface PanelReceipt extends PanelReference { messageId: string }
 export interface Task {
@@ -17,6 +17,13 @@ export interface MoneyTask {
     retryAt?: number; retries?: number; state: 'PENDING' | 'SENDING' | 'DONE' | 'UNKNOWN' | 'FAILED'; lease?: string; leaseUntil?: number; error?: string; evidence?: string; resolution?: 'committed' | 'inactive' | 'rejected';
 }
 export interface RoomState {
+    challenge?: import('../game/random.js').Challenge;
+    aiPersonality?: import('../game/personality.js').Personality;
+    gameRandom?: import('../game/random.js').RandomState;
+    aiRandom?: import('../game/random.js').RandomState;
+    statistics?: import('../statistics/model.js').MatchCounters;
+    replay?: import('../replay/format.js').ReplayTracking;
+    replayBase?: string;
     schemaVersion: 2; gameId: string; botId: string; groupId: string; host: string;
     version: number; status: Status; mode: Mode; stake: number; difficulty: number;
     config: ConfigSnapshot; createdAt: number; members: Member[]; game?: Game;
@@ -33,6 +40,7 @@ export interface Request {
     | { type: 'reconcile'; taskId: string } | { type: 'removed'; target: string } | { type: 'abort' };
 }
 export interface CreateInput {
+    challenge?: import('../game/random.js').Challenge;
     botId: string; groupId: string; gameId: string; mode: Mode; stake: number; difficulty: number;
     member: Member; config: ConfigSnapshot;
 }

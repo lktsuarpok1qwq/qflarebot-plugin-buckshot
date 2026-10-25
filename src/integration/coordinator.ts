@@ -1,10 +1,15 @@
+import { validateChallenge } from '../game/random.js';
+import { targetFor, validateConversation } from '../conversation.js';
 import { recallLater, waitForTime } from '../templates/send.js';
 import type { PluginContext, Session } from '@qqbot/sdk';
-import { BuckshotRoom, BuckshotPlayerRegistry } from '../room/durable.js';
+import type { BuckshotRoom } from '../room/durable.js';
+import type { BuckshotPlayerRegistry } from '../room/registry.js';
 import type { CreateInput, Request } from '../room/model.js';
 import { identifier, payout, validateConfig } from '../config.js';
 import { requireRule } from '../game/types.js';
 import { processMoney } from './points.js';
+import type { Action } from '../game/types.js';
+import type { view } from '../room/state.js';
 import { refreshName } from './nickname.js';
 import type { AdmissionName } from '../room/names.js';
 
@@ -19,13 +24,15 @@ export function registryFor(ctx: PluginContext, user: string) {
 }
 
 export async function coordinateCreate(ctx: PluginContext, input: CreateInput, eventName = input.member.name) {
+    validateChallenge(input);
+    validateConversation(input.groupId, input.mode, input.member.id);
     const room = roomFor(ctx, input.groupId), serialized = JSON.stringify(input);
     requireRule(!await room.isClosed(input.gameId), '创建编号已关闭');
     [input.botId, input.groupId, input.gameId, input.member.id, input.member.privateId].forEach(identifier);
     requireRule(input.botId === ctx.botId && ['solo', 'duo', 'multi'].includes(input.mode) && Number.isInteger(input.difficulty) && input.difficulty >= 0 && input.difficulty < 5, '创建参数无效');
     validateConfig(input.config.values);
     const cfg = input.config.values;
-    requireRule(Number.isSafeInteger(input.stake) && input.stake >= 0 && (input.stake ? cfg.stakesEnabled && cfg.calibrated && input.stake >= cfg.minStake && input.stake <= cfg.maxStake && (input.mode !== 'solo' || payout(input.stake, cfg.multipliers[input.difficulty]) <= 1e12 && payout(input.stake, cfg.multipliers[input.difficulty]) - input.stake <= cfg.rewardLimit) : cfg.freeEnabled), '下注范围或模式配置无效');
+    requireRule(Number.isSafeInteger(input.stake) && input.stake >= 0 && (input.stake ? cfg.stakesEnabled && input.stake >= cfg.minStake && input.stake <= cfg.maxStake && (input.mode !== 'solo' || payout(input.stake, cfg.multipliers[input.difficulty]) <= 1e12 && payout(input.stake, cfg.multipliers[input.difficulty]) - input.stake <= cfg.rewardLimit) : cfg.freeEnabled), '下注范围或模式配置无效');
     const owner = await registryFor(ctx, input.member.id).owner();
     requireRule(!owner || owner.gameId === input.gameId && owner.groupId === input.groupId, '你已有尚未关闭的房间');
     await ctx.db.run('INSERT INTO {rooms}(bot,group_id,game,status,due,intent) VALUES(?,?,?,?,?,?) ON CONFLICT(bot,group_id) DO UPDATE SET game=excluded.game,status=excluded.status,due=excluded.due,revision=0,intent=excluded.intent WHERE {rooms}.status=?', ctx.botId, input.groupId, input.gameId, 'CREATING', Date.now(), serialized, 'CLOSED');
@@ -48,7 +55,7 @@ export async function coordinateCreate(ctx: PluginContext, input: CreateInput, e
         throw error;
     }
 
-    const result = await room.create(input, name.value);
+    const result = await room.create(input, name.value, name.value ? 0 : name.nextLookup ?? Date.now() + 30000, ctx.publicUrl);
     refreshName(ctx, room, registry, { gameId: input.gameId, groupId: input.groupId, userId: input.member.id, claimId: input.gameId }, name);
     await ctx.db.run('UPDATE {coord_ops} SET state=? WHERE bot=? AND game_id=? AND id=?', 'CREATE_ACCEPTED', ctx.botId, input.gameId, `create:${input.gameId}`);
 
@@ -64,9 +71,8 @@ export async function coordinateJoin(ctx: PluginContext, group: string, request:
     request = { ...request, action: request.action.type === 'join' ? { ...request.action, member: { ...request.action.member, claimId: request.actionId } } : request.action };
     const serialized = JSON.stringify({ group, request });
     const inserted = await ctx.db.run('INSERT OR IGNORE INTO {coord_ops}(bot,id,game_id,request,state) VALUES(?,?,?,?,?)', ctx.botId, request.actionId, request.gameId, serialized, 'PENDING');
-    const prior = await ctx.db.first<{ request: string; state: string }>('SELECT request,state FROM {coord_ops} WHERE bot=? AND game_id=? AND id=?', ctx.botId, request.gameId, request.actionId);
-    const saved = prior ? JSON.parse(prior.request) as { group: string; request: Request } : null;
-    requireRule(prior && saved && JSON.stringify({ group: saved.group, request: saved.request }) === serialized, '加入编号冲突');
+    const prior = inserted.changes ? { request: serialized, state: 'PENDING' } : await ctx.db.first<{ request: string; state: string }>('SELECT request,state FROM {coord_ops} WHERE bot=? AND game_id=? AND id=?', ctx.botId, request.gameId, request.actionId);
+    requireRule(prior && prior.request === serialized, '加入编号冲突');
     requireRule(prior.state !== 'REJECTED', '该加入请求已拒绝，请查询状态后重新加入');
     const room = roomFor(ctx, group);
 
@@ -102,7 +108,7 @@ export async function coordinateJoin(ctx: PluginContext, group: string, request:
 
     const admittedAt = Date.now();
 
-    try { result = await room.command(request, false, name.value); } catch (error) {
+    try { result = await room.command(request, false, name.value, name.value ? 0 : name.nextLookup ?? Date.now() + 30000); } catch (error) {
         // 只有 Room 已持久化拒绝、且玩家未入房时才能补偿占用；未知结果留待恢复。
         const op = await room.operation(request.gameId, request.actionId);
         const state = await room.publicState();
@@ -124,10 +130,14 @@ export async function coordinateJoin(ctx: PluginContext, group: string, request:
     return result;
 }
 
-export async function drain(ctx: PluginContext, group: string, session?: Session, initial?: Awaited<ReturnType<BuckshotRoom['work']>>) {
+export interface DrainResult { room: ReturnType<typeof view> | null; moves: Action[]; panelHandled: boolean; continuing?: boolean }
+interface DeliveryOptions { foreground?: boolean; budget?: { deadline: number; passiveReplies: number; remaining: number }; onComplete?: (result: DrainResult) => Promise<void> }
+
+export async function drain(ctx: PluginContext, group: string, session?: Session, initial?: Awaited<ReturnType<BuckshotRoom['work']>>, deferReading = true, options: DeliveryOptions = {}): Promise<DrainResult> {
     const room = roomFor(ctx, group);
     // SDK 一次发送最多占用约 20 秒；8 秒后不再领取新任务，给宿主生命周期留出余量。
-    const deadline = Date.now() + 8000;
+    const budget = options.budget ?? { deadline: Date.now() + 8000, passiveReplies: 0, remaining: 24 };
+    const deadline = budget.deadline;
     let work = initial ?? await room.work(undefined, undefined, true, true);
 
     if (!work) { return { room: null, moves: [], panelHandled: false }; }
@@ -143,36 +153,56 @@ export async function drain(ctx: PluginContext, group: string, session?: Session
         if (!work.task) { work = await room.work(work.gameId, undefined, Date.now() < deadline, true); }
     }
 
-    let panelHandled = false, passiveReplies = 0;
+    let panelHandled = false;
 
     // 前四条沿用事件凭据；连续行动余下消息使用已有的主动发送权限，给宿主返回值留一条被动额度。
 
-    for (let i = 0; work && i < 24; i++) {
+    while (work && budget.remaining > 0) {
         if (!work.task && work.resumeAt !== undefined && work.resumeAt < deadline) {
             await waitForTime(work.resumeAt);
             work = await room.work(work.gameId, undefined, Date.now() < deadline, true);
         }
 
-        if (!work?.task) { break; }
+        if (!work?.task) {
+            if (deferReading && work?.resumeAt !== undefined && work.resumeAt >= deadline) {
+                const resumeAt = work.resumeAt, gameId = work.gameId;
+                // 阅读超出当前处理窗口时只接续一次，复用 SDK 后台生命周期，不轮询或递归延长。
+                ctx.waitUntil((async () => {
+                    await waitForTime(resumeAt);
+
+                    try { await drain(ctx, group, undefined, await room.work(gameId, undefined, true, true), false); } catch { ctx.logger.warn('阅读后接续未完成，等待持久化恢复', { gameId }); }
+                })());
+            }
+
+            break;
+        }
 
         const task = work.task;
-        let outcome: 'SENT' | 'FAILED' | 'UNKNOWN' = 'UNKNOWN', messageId: string | undefined, errorCode: string | undefined;
+        budget.remaining--;
+        const target = task.private ? { scene: 'c2c' as const, id: task.target } : targetFor(task.target);
+        const sameConversation = session?.scene === target.scene && session.targetId === target.id;
+        let outcome: 'SENT' | 'FAILED' | 'UNKNOWN' = 'UNKNOWN', messageId: string | undefined, errorCode: string | undefined, sentAt: number | undefined;
 
         try {
             if (task.kind === 'recall') {
-                const ok = session?.scene === 'group' && session.targetId === group ? await session.recall(task.messageId) : await ctx.api.recallMessage({ scene: 'group', id: group }, task.messageId!);
+                const ok = sameConversation ? await session!.recall(task.messageId) : await ctx.api.recallMessage(target, task.messageId!);
                 outcome = ok ? 'SENT' : 'UNKNOWN';
                 errorCode = ok ? undefined : 'RECALL_NOT_CONFIRMED:SDK_FALSE';
             } else {
                 const rendered = task.payload!;
                 const message = task.plain && typeof rendered !== 'string' ? rendered.text ?? task.text : rendered;
-                const result = !task.private && session?.scene === 'group' && session.targetId === group && session.canReply && passiveReplies++ < 4
-                    ? await session.reply(message) : await ctx.api.sendMessage({ scene: task.private ? 'c2c' : 'group', id: task.target }, message);
+                const result = sameConversation && session!.canReply && budget.passiveReplies++ < 4
+                    ? await session!.reply(message) : await ctx.api.sendMessage(target, message);
+                sentAt = Date.now();
                 messageId = result.messageId;
                 errorCode = result.ok ? undefined : `HTTP_${result.status}:QQ_${result.code ?? 'NONE'}`;
                 outcome = result.ok && !!messageId ? 'SENT' : result.status >= 400 && result.status < 500 ? 'FAILED' : 'UNKNOWN';
 
-                if (outcome === 'SENT' && !task.private && !task.keep) { recallLater(ctx, group, messageId!, { gameId: work.gameId, taskId: task.id, loadId: task.loadId }, work.recallSeconds); }
+                if (outcome === 'SENT' && !task.keep) {
+                    const game = work.room.game;
+                    const reading = !task.private && task.loadId === game?.loadId && game?.players.find(p => p.id === game.current)?.ai ? work.aiReadSeconds : 0;
+                    recallLater(ctx, target.scene === 'c2c' ? 'c2c:' + target.id : target.id, messageId!, { gameId: work.gameId, taskId: task.id, loadId: task.loadId }, Math.max(work.recallSeconds, reading), sentAt);
+                }
 
                 if (task.panel) { panelHandled = true; }
             }
@@ -190,23 +220,37 @@ export async function drain(ctx: PluginContext, group: string, session?: Session
             });
         }
 
-        work = await room.work(work.gameId, { id: task.id, lease: task.lease!, outcome, messageId, errorCode }, i < 23 && Date.now() < deadline, true);
+        work = await room.work(work.gameId, { id: task.id, lease: task.lease!, outcome, messageId, errorCode, sentAt }, budget.remaining > 0 && Date.now() < deadline, true);
 
         for (const id of work?.discardPanels ?? []) { recallLater(ctx, group, id, { gameId: work!.gameId }, work!.recallSeconds); }
+
+        if (options.foreground && outcome === 'SENT' && work && (work.task || work.resumeAt !== undefined || work.moneyDue || work.release.length || work.closeEmpty || work.pendingReleases.length)) {
+            // 复用已经领取的下一任务、事件凭据和同一个时间预算，后台不重放动作、不增加轮询。
+            const continuation = drain(ctx, group, session, work, deferReading, { budget }).then(result => options.onComplete?.(result)).catch(() => { ctx.logger.warn('消息后台续跑未完成，等待原任务恢复', { gameId: work!.gameId }); });
+            ctx.waitUntil(continuation);
+
+            return { room: work.room, moves: work.moves, panelHandled: true, continuing: true };
+        }
     }
 
     if (work) {
-        for (const id of work.release) {
-            await registryFor(ctx, id).release(work.gameId);
-            await room.markReleased(work.gameId, id);
-        }
+        const released: string[] = [];
 
-        if (work.closeEmpty) { await room.markReleased(work.gameId, ''); }
+        try {
+            for (const id of work.release) {
+                const history = work.history ? (({ results, ...record }) => ({ ...record, ...(results[id] ? { result: results[id] } : {}) }))(work.history) : undefined;
+                await registryFor(ctx, id).release(work.gameId, work.room.members.find(m => m.id === id)?.claimId ?? work.gameId, history);
+                released.push(id);
+            }
+        } finally {
+            // 只确认已成功释放的成员；中断后其余成员仍由原恢复路径处理。
+            if (released.length || work.closeEmpty) { await room.markReleased(work.gameId, released); }
+        }
 
         if (work.release.length || work.closeEmpty) { work = await room.work(work.gameId, undefined, false); }
     }
 
-    return { room: work?.room ?? null, moves: work?.moves ?? [], panelHandled: panelHandled || !!work?.room.tasks.some(t => t.state === 'UNKNOWN' || t.state === 'FAILED' || t.state === 'SENDING') };
+    return { room: work?.room ?? null, moves: work?.moves ?? [], panelHandled: panelHandled || budget.remaining === 0 && !!work?.room.tasks.length || !!work?.room.tasks.some(t => t.state === 'UNKNOWN' || t.state === 'FAILED' || t.state === 'SENDING') };
 }
 
 export async function cron(ctx: PluginContext): Promise<void> {

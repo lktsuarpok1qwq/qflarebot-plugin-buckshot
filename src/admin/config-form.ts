@@ -1,26 +1,27 @@
 import { parseMultiplier } from './multipliers.js';
+import { parsePoints, formatPoints } from '../amounts.js';
 
-export const configForm = 'const parseMultiplier = ' + parseMultiplier.toString() + ';\n' + String.raw`
-const fields = [['freeEnabled', '免费模式', 'boolean'], ['stakesEnabled', '积分下注', 'boolean'], ['calibrated', '倍率已校准', 'boolean'], ['turnSeconds', '操作时间（秒）', 'number'], ['recallSeconds', '自动撤回等待（秒，1～20）', 'number'], ['aiDelaySeconds', 'AI 中断恢复延迟（秒）', 'number'], ['aiBudgetMs', 'AI 搜索预算（毫秒）', 'number'], ['minStake', '最小下注（最小单位）', 'number'], ['maxStake', '最大下注（最小单位）', 'number'], ['rewardLimit', '奖励上限（最小单位）', 'number'], ['multipliers', '五档倍率（1～10 倍，最多 3 位小数）', 'multipliers']];
+export const configForm = 'const parseMultiplier = ' + parseMultiplier.toString() + ';\nconst parsePoints = ' + parsePoints.toString() + ';\nconst formatPoints = ' + formatPoints.toString() + ';\n' + String.raw`
+const fields = [['showAIStyle', '显示庄家性格', 'boolean'], ['freeEnabled', '免费模式', 'boolean'], ['stakesEnabled', '积分下注', 'boolean'], ['turnSeconds', '操作时间（秒）', 'number'], ['recallSeconds', '自动撤回等待（秒，1～20）', 'number'], ['aiReadSeconds', 'AI 先手装填阅读时间（秒，0～10）', 'number'], ['aiDelaySeconds', 'AI 中断恢复延迟（秒）', 'number'], ['aiBudgetMs', 'AI 搜索预算（毫秒）', 'number'], ['minStake', '最小下注（积分，最多 2 位小数）', 'money'], ['maxStake', '最大下注（积分，最多 2 位小数）', 'money'], ['rewardLimit', '奖励上限（积分，最多 2 位小数）', 'money'], ['multipliers', '五档倍率（1～10 倍，最多 3 位小数）', 'multipliers']];
 let configEpoch = 0, configBusy = false, loaded = null, baseline = '', pending = null;
-const drafts = new Map();
+let savedDraft = null;
 
 function validateValues(value) {
     if (!value || typeof value !== 'object') { throw new Error('配置响应无效'); }
 
-    for (const key of ['freeEnabled', 'stakesEnabled', 'calibrated']) {
+    for (const key of ['freeEnabled', 'stakesEnabled', 'showAIStyle']) {
         if (typeof value[key] !== 'boolean') { throw new Error('开关格式无效'); }
     }
 
-    for (const [key, min, max] of [['turnSeconds', 20, 300], ['recallSeconds', 1, 20], ['aiDelaySeconds', 1, 3], ['aiBudgetMs', 1, 8], ['minStake', 1, 1e12], ['maxStake', 1, 2.5e11], ['rewardLimit', 0, 1e12]]) {
+    for (const [key, min, max] of [['turnSeconds', 20, 300], ['recallSeconds', 1, 20], ['aiReadSeconds', 0, 10], ['aiDelaySeconds', 1, 3], ['aiBudgetMs', 1, 8], ['minStake', 1, 1e12], ['maxStake', 1, 2.5e11], ['rewardLimit', 0, 1e12]]) {
         if (!Number.isSafeInteger(value[key]) || value[key] < min || value[key] > max) {
-            const error = new Error(fields.find(field => field[0] === key)[1] + '须为 ' + min + '～' + max + ' 的整数');
+            const error = new Error(fields.find(field => field[0] === key)[1] + '须为 ' + (['minStake', 'maxStake', 'rewardLimit'].includes(key) ? formatPoints(min) + '～' + formatPoints(max) + '，最多 2 位小数' : min + '～' + max + ' 的整数'));
             error.field = key;
             throw error;
         }
     }
 
-    if (value.minStake > value.maxStake || value.stakesEnabled && !value.calibrated) { throw new Error('下注范围或校准状态无效'); }
+    if (value.minStake > value.maxStake) { throw new Error('下注范围无效'); }
 
     if (!Array.isArray(value.multipliers) || value.multipliers.length !== 5 || value.multipliers.some(n => !Number.isSafeInteger(n) || n < 1000 || n > 10000)) { throw new Error('配置响应中的五档倍率无效'); }
 }
@@ -32,7 +33,8 @@ function draft() {
 
     for (const [key, , type] of fields) {
         const e = $('cfg-' + key);
-        value[key] = type === 'boolean' ? e.checked : type === 'number' ? (e.value.trim() ? Number(e.value) : NaN) : [...e.querySelectorAll('input')].map(input => input.value);
+
+        value[key] = type === 'boolean' ? e.checked : type === 'number' ? (e.value.trim() ? Number(e.value) : NaN) : type === 'money' ? e.value.trim() : [...e.querySelectorAll('input')].map(input => input.value);
     }
 
     return value;
@@ -41,17 +43,38 @@ function draft() {
 function internal(value) {
     if (!Object.keys(value).length) { return value; }
 
+    const amounts = {};
+
+    for (const key of ['minStake', 'maxStake', 'rewardLimit']) {
+        if (!Object.hasOwn(value, key)) { continue; }
+
+        try { amounts[key] = parsePoints(value[key], key === 'rewardLimit'); } catch (error) {
+            error.field = key;
+            throw error;
+        }
+    }
+
     return {
-        ...value, multipliers: value.multipliers.map((text, index) => {
-            try { return parseMultiplier(text); } catch (error) {
-                error.field = 'multiplier-' + index;
-                throw error;
-            }
-        })
+        ...value, ...amounts, ...(value.multipliers ? {
+            multipliers: value.multipliers.map((text, index) => {
+                try { return parseMultiplier(text); } catch (error) {
+                    error.field = 'multiplier-' + index;
+                    throw error;
+                }
+            })
+        } : {})
     };
 }
 
-function display(value) { return { ...value, multipliers: value.multipliers.map(n => String(n / 1000)) }; }
+function display(value) {
+    const result = { ...value };
+
+    for (const key of ['minStake', 'maxStake', 'rewardLimit']) { if (Object.hasOwn(value, key)) { result[key] = formatPoints(value[key]); } }
+
+    if (value.multipliers) { result.multipliers = value.multipliers.map(n => String(n / 1000)); }
+
+    return result;
+}
 
 function dirty() {
     if (!loaded) { return false; }
@@ -64,8 +87,7 @@ function buttons() {
     const changed = dirty();
     $('saveConfig').disabled = !changed || configBusy || !!pending;
     $('undoConfig').disabled = !changed || configBusy || !!pending;
-    $('clearConfig').disabled = !loaded || loaded.scope === '*' || configBusy || !!pending;
-    $('configStatus').textContent = pending ? '保存结果未知，请核对或重试原请求' : !loaded ? '尚未加载' : changed ? '有未保存修改' : (loaded.scope === '*' ? '全局配置' : '群 ' + loaded.scope) + ' · 版本 ' + loaded.version;
+    $('configStatus').textContent = pending ? '保存结果未知，请核对或重试原请求' : !loaded ? '尚未加载' : changed ? '有未保存修改' : '统一配置' + ' · 版本 ' + loaded.version;
     $('checkConfig').hidden = !pending;
     $('checkConfig').disabled = configBusy;
     $('loadConfig').disabled = configBusy || !!pending;
@@ -74,10 +96,12 @@ function buttons() {
 }
 
 function fill(value) {
+    const effective = value;
+
     for (const [key, , type] of fields) {
         const e = $('cfg-' + key);
 
-        if (type === 'boolean') { e.checked = value[key]; } else if (type === 'multipliers') { [...e.querySelectorAll('input')].forEach((input, i) => input.value = value[key][i]); } else { e.value = value[key]; }
+        if (type === 'boolean') { e.checked = effective[key]; } else if (type === 'multipliers') { [...e.querySelectorAll('input')].forEach((input, i) => input.value = effective[key][i]); } else { e.value = effective[key]; }
     }
 }
 
@@ -86,13 +110,35 @@ function loadForm(result) {
     $('configErrors').textContent = '';
     $('configForm').replaceChildren();
 
-    for (const [key, label, type] of fields) {
-        const row = document.createElement(type === 'multipliers' ? 'div' : 'label');
+    const groups = [
+        ['常用设置', ['freeEnabled', 'showAIStyle', 'turnSeconds', 'aiReadSeconds', 'recallSeconds'], '阅读时间默认 5 秒，0 表示不等待；仅装填后 AI 先手时生效，不占用玩家操作倒计时。装填公告至少保留到阅读结束；最新操作面板保留，旧面板成功替换后按撤回时间清理。'],
+        ['积分与返还', ['stakesEnabled', 'minStake', 'maxStake', 'rewardLimit', 'multipliers'], '金额以积分填写，最多 2 位小数；输入 10 表示 10.00 积分。倍率包含本金，最多 3 位小数。'],
+        ['高级设置', ['aiDelaySeconds', 'aiBudgetMs'], 'AI 中断恢复延迟仅用于后台接手未完成行动，默认 2 秒，可设 1～3 秒；正常请求直接推进。搜索预算默认 4 毫秒，可设 1～8 毫秒；无需调大，复杂局面同时受节点上限约束。每日挑战按固定节点计算。']
+    ];
+    const sections = new Map();
+
+    for (const [title, keys, hint] of groups) {
+        const folded = title !== '常用设置', section = document.createElement(folded ? 'details' : 'fieldset'), legend = document.createElement(folded ? 'summary' : 'legend'), help = document.createElement('p');
+        section.className = 'config-section';
+        legend.textContent = title;
+        help.className = 'hint';
+        help.textContent = hint;
+        section.append(legend, help);
+        $('configForm').append(section);
+
+        for (const key of keys) { sections.set(key, section); }
+    }
+
+    const ordered = groups.flatMap(([, keys]) => keys).map(key => fields.find(field => field[0] === key));
+
+    for (const [key, label, type] of ordered) {
+        const row = document.createElement('div');
         row.className = 'row';
         const name = document.createElement('span');
         name.textContent = label;
         const e = document.createElement(type === 'multipliers' ? 'span' : 'input');
         e.id = 'cfg-' + key;
+        e.setAttribute('aria-label', label);
 
         if (type === 'multipliers') {
             for (const difficulty of ['新手', '普通', '困难', '专家', '恶魔']) {
@@ -113,9 +159,16 @@ function loadForm(result) {
             }
         } else { e.type = type === 'boolean' ? 'checkbox' : 'number'; }
 
-        if (key === 'recallSeconds') {
-            e.min = '1';
-            e.max = '20';
+        if (type === 'money') {
+            e.min = key === 'rewardLimit' ? '0' : '0.01';
+            e.max = key === 'maxStake' ? '2500000000' : '10000000000';
+            e.step = '0.01';
+            e.inputMode = 'decimal';
+        }
+
+        if (key === 'recallSeconds' || key === 'aiReadSeconds') {
+            e.min = key === 'aiReadSeconds' ? '0' : '1';
+            e.max = key === 'aiReadSeconds' ? '10' : '20';
             e.step = '1';
         }
 
@@ -125,46 +178,41 @@ function loadForm(result) {
             e.removeAttribute('aria-invalid');
             buttons();
         };
-        row.append(name, e);
-        $('configForm').append(row);
+        const controls = document.createElement('div');
+        controls.className = 'config-controls';
+
+        controls.append(e);
+        row.append(name, controls);
+        sections.get(key).append(row);
     }
 
-    fill(display(result.effective.values));
+    fill(display(result.value));
     baseline = JSON.stringify(draft());
     $('configForm').hidden = false;
     buttons();
 }
 
-$('scope').oninput = () => {
-    if (loaded && dirty()) { drafts.set(loaded.scope, draft()); }
-
-    configEpoch++;
-    loaded = null;
-    baseline = '';
-    $('configForm').hidden = true;
-    buttons();
-};
 $('loadConfig').onclick = async () => {
     if (configBusy || pending) { return; }
 
-    if (dirty() && !await confirmAction('重新加载会覆盖本范围的未保存修改')) { return; }
+    if (dirty() && !await confirmAction('重新加载会覆盖未保存修改')) { return; }
 
     configBusy = true;
     $('loadConfig').disabled = true;
-    const scope = $('scope').value.trim() || '*', own = ++configEpoch, feedback = epoch.config;
+    const own = ++configEpoch, feedback = epoch.config;
 
     try {
-        const r = await api('/api/config?scope=' + encodeURIComponent(scope));
+        const r = await api('/api/config');
 
-        if (r.scope !== scope || !Number.isSafeInteger(r.version) || r.version < 0) { throw new Error('配置响应无效'); }
+        if (!Number.isSafeInteger(r.version) || r.version < 0) { throw new Error('配置响应无效'); }
 
-        validateValues(r.effective?.values);
+        validateValues(r.value);
 
         if (own === configEpoch) {
             loadForm(r);
 
-            if (drafts.has(scope)) {
-                fill(drafts.get(scope));
+            if (savedDraft) {
+                fill(savedDraft);
                 buttons();
             }
 
@@ -186,53 +234,53 @@ $('undoConfig').onclick = () => {
 };
 
 function acceptConfig(result, operation) {
-    if (result.scope !== operation.input.scope || result.operationId !== operation.input.operationId || result.version !== operation.input.version + 1 || canonical(result.value) !== canonical(internal(operation.input.value))) { throw new Error('保存回执无效'); }
+    if (result.operationId !== operation.input.operationId || result.version !== operation.input.version + 1 || canonical(result.value) !== canonical(internal(operation.input.value))) { throw new Error('保存回执无效'); }
 
-    if (loaded && loaded.scope === result.scope && configEpoch === operation.epoch) {
+    if (loaded && configEpoch === operation.epoch) {
         loaded.version = result.version;
         loaded.value = result.value;
 
-        if (Object.keys(result.value).length) {
-            baseline = JSON.stringify(display(result.value));
-            fill(JSON.parse(baseline));
-        } else {
-            loaded = null;
-            $('configForm').hidden = true;
-        }
+        validateValues(result.value);
+        baseline = JSON.stringify(display(result.value));
+        fill(JSON.parse(baseline));
     }
 
-    drafts.delete(result.scope);
+    savedDraft = null;
     pending = null;
     buttons();
 }
 
-async function save(clear) {
-    if (configBusy || pending || !loaded || !clear && !dirty()) { return; }
+async function save() {
+    if (configBusy || pending || !loaded || !dirty()) { return; }
 
-    const value = clear ? {} : draft();
+    const value = draft();
 
-    try { if (!clear) { validateValues(internal(value)); } } catch (e) {
+    try { validateValues(internal(value)); } catch (e) {
         $('configErrors').textContent = e.message;
         const field = e.field && $('cfg-' + e.field);
 
         if (field) {
             field.setAttribute('aria-invalid', 'true');
+            const section = field.closest('details');
+
+            if (section) { section.open = true; }
+
             field.focus();
         }
 
         return;
     }
 
-    const snapshot = { scope: loaded.scope, version: loaded.version, epoch: configEpoch, feedback: epoch.config };
+    const snapshot = { version: loaded.version, epoch: configEpoch, feedback: epoch.config };
 
     // 先锁定处理器；模态确认期间保留触发按钮焦点，接受后再禁用表单。
     configBusy = true;
 
     try {
-        if (!await confirmAction(clear ? '清除本群覆盖，之后新房间使用全局设置' : '保存配置，仅对之后创建的房间生效')) { return; }
+        if (!await confirmAction('保存配置，仅对之后创建的房间生效')) { return; }
 
         const feedback = snapshot.feedback;
-        const operation = { feedback, input: { scope: snapshot.scope, version: snapshot.version, value, operationId: crypto.randomUUID() }, epoch: snapshot.epoch };
+        const operation = { feedback, input: { version: snapshot.version, value, operationId: crypto.randomUUID() }, epoch: snapshot.epoch };
         pending = operation;
         buttons();
         const result = await api('/api/config', operation.input);
@@ -247,8 +295,7 @@ async function save(clear) {
     }
 }
 
-$('saveConfig').onclick = () => save(false);
-$('clearConfig').onclick = () => save(true);
+$('saveConfig').onclick = save;
 $('checkConfig').onclick = async () => {
     if (configBusy || !pending) { return; }
 
@@ -263,11 +310,11 @@ $('checkConfig').onclick = async () => {
         if (r.status === 'DONE') {
             acceptConfig(r.result, operation);
             feedback('保存结果已核对');
-        } else if (r.status === 'REJECTED' && r.result?.operationId === operation.input.operationId && r.result?.scope === operation.input.scope) {
-            drafts.set(operation.input.scope, operation.input.value);
+        } else if (r.status === 'REJECTED' && r.result?.operationId === operation.input.operationId) {
+            savedDraft = operation.input.value;
             pending = null;
 
-            if (loaded?.scope === operation.input.scope) {
+            if (loaded) {
                 loaded = null;
                 $('configForm').hidden = true;
             }

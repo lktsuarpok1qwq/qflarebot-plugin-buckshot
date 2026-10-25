@@ -1,13 +1,31 @@
+import { menuEntries } from './menu.js';
 import { qqAt } from '@qqbot/sdk';
+import { formatPoints } from '../amounts.js';
 import { renderTemplate, escapeMarkdown } from './replies.js';
 import type { ReplyConfiguration, ReplyButton } from './reply-config.js';
 import type { view } from '../room/state.js';
 import type { Action } from '../game/types.js';
 
 export interface Part { key: string; values: Record<string, string> }
-export interface MessageInput { mentionCurrent?: boolean; now?: number; values?: Record<string, string>; room?: ReturnType<typeof view>; parts?: Part[]; moves?: Action[]; offset?: number; actor?: string; dynamic?: Record<string, string>; choices?: string[]; reason?: string; name?: string; notice?: string }
+export interface MessageInput { path?: number[]; scene?: 'group' | 'c2c'; mentionCurrent?: boolean; now?: number; values?: Record<string, string>; room?: ReturnType<typeof view>; parts?: Part[]; moves?: Action[]; offset?: number; actor?: string; dynamic?: Record<string, string>; choices?: string[]; reason?: string; name?: string; notice?: string }
 
 const variables = new WeakMap<ReplyConfiguration['replies'], Map<string, { source: string; names: string[] }>>();
+
+// 两种发送格式共用玩家查找、金额和菜单分页，只分别展开各自的转义正文。
+export function preparePresentation(input: MessageInput) {
+    const s = input.room, moves = input.moves ?? [], requested = input.offset ?? 0;
+    const menu = menuEntries(moves, s?.game?.players ?? [], input.actor ?? '', input.path);
+    const offset = requested < menu.entries.length ? requested : 0;
+    const players = new Map(s?.game?.players.map(p => [p.id, p]));
+    const canQuit = !input.reason && s?.status === 'PLAYING' && !s.paused && !s.recovery && !!s.game?.players.some(p => p.id === input.actor && !p.ai && p.life > 0);
+    const capacity = 25 - Number(canQuit) - Number(menu.path.length > 0), count = menu.entries.length <= capacity ? capacity : capacity - 2;
+    const now = input.now ?? Date.now();
+
+    return {
+        menu, players, current: s?.game ? players.get(s.game.current) : undefined, offset, count, canQuit, selected: menu.entries.slice(offset, offset + count),
+        stake: s?.stake ? formatPoints(s.stake) : '', seconds: s ? String(Math.ceil(Math.max(0, s.deadline === undefined ? s.remainingMs : s.deadline - now) / 1000)) : '', reading: Math.max(0, (s?.aiReadUntil ?? 0) - now)
+    };
+}
 
 // 普通文字与 Markdown 共用组成规则，变量分别按发送格式处理。
 export function createReplyPresentation(render: typeof renderTemplate, escape: typeof escapeMarkdown) {
@@ -31,9 +49,11 @@ export function createReplyPresentation(render: typeof renderTemplate, escape: t
 
         const used = entry.names;
 
+        if (!used.length) { return source; }
+
         if (used.some(k => !Object.hasOwn(values, k))) { throw Error('缺少模板数据：' + key); }
 
-        const output = render(source, Object.fromEntries(Object.entries(values).map(([k, v]) => [k, raw.includes(k) ? v : escape(String(v))])));
+        const output = render(source, Object.fromEntries(used.map(k => [k, raw.includes(k) ? values[k] : escape(String(values[k]))])));
 
         return output;
     }
@@ -56,7 +76,7 @@ export function createReplyPresentation(render: typeof renderTemplate, escape: t
             raw.push('target');
         }
 
-        return text(config, p.key, v, raw);
+        return text(config, p.key, v, raw) + (v.replayUrl && ['finish', 'noWinner'].includes(p.key) ? '\n' + text(config, 'replayLink', { url: v.replayUrl }, ['url']) : '');
     }
 
     function buttons(config: ReplyConfiguration, key: string, dynamic: Record<string, string> = {}, choices: string[] = []) {
@@ -69,7 +89,11 @@ export function createReplyPresentation(render: typeof renderTemplate, escape: t
             for (const item of row) {
                 if (item.action === 'choice') {
                     result.push(...choices.map((data, i) => ({ ...item, label: item.label.replaceAll('{{number}}', String(i + 1)), data })));
-                } else if (item.action.startsWith('draft') || ['join', 'ready', 'start', 'choose', 'quit', 'confirmCreate', 'confirmQuit', 'next', 'previous'].includes(item.action)) {
+                } else if (item.action === 'link') {
+                    const data = item.data ?? dynamic.link;
+
+                    if (data) { result.push({ ...item, data }); }
+                } else if (item.action.startsWith('draft') || ['join', 'ready', 'start', 'choose', 'quit', 'confirmCreate', 'confirmQuit', 'next', 'previous', 'menuBack'].includes(item.action)) {
                     if (dynamic[item.action]) { result.push({ ...item, data: dynamic[item.action] }); }
                 } else { result.push({ ...item }); }
             }
@@ -84,7 +108,7 @@ export function createReplyPresentation(render: typeof renderTemplate, escape: t
         return rows;
     }
 
-    function message(config: ReplyConfiguration, key: string, input: MessageInput = {}, withButtons = true) {
+    function message(config: ReplyConfiguration, key: string, input: MessageInput = {}, withButtons = true, prepared = preparePresentation(input)) {
         const values = { ...input.values }, raw: string[] = [], dynamic = { ...input.dynamic };
         let choices = input.choices ?? [];
         const t = (k: string, v: Record<string, string> = {}, r: string[] = []) => text(config, k, v, r);
@@ -94,37 +118,51 @@ export function createReplyPresentation(render: typeof renderTemplate, escape: t
         if (key === 'panel') {
             const s = input.room!;
             const rows = s.game ? s.game.players.map((p, i) => t('player', { number: String(i + 1), name: displayName(p), life: String(p.life), control: p.control === 'none' ? '' : t('controlled'), inventory: p.inventory.length ? p.inventory.map((item, n) => t('inventoryItem', { number: String(n + 1), item: t('item' + item) }, ['item'])).join(t('inventorySeparator')) : t('inventoryEmpty') }, ['name', 'inventory', 'control'])) : s.members.map(p => t('member', { name: displayName(p), ready: t(p.ready ? 'ready' : 'notReady') }, ['name', 'ready']));
-            const seconds = String(Math.ceil(Math.max(0, s.deadline === undefined ? s.remainingMs : s.deadline - (input.now ?? Date.now())) / 1000));
-            const reading = Math.max(0, (s.aiReadUntil ?? 0) - (input.now ?? Date.now()));
+            const { seconds, reading, current } = prepared;
             const timer = reading && s.status === 'PLAYING' && !s.paused && !s.recovery ? t('timerReading', { seconds: String(Math.ceil(reading / 1000)) }) : s.status !== 'PLAYING' ? t(s.game ? 'timerEnded' : 'timerWaiting') : t(s.paused || s.recovery ? 'timerPaused' : 'timer', { seconds });
-            const current = s.game?.players.find(p => p.id === s.game!.current);
             const currentName = current ? input.mentionCurrent && !current.ai && s.status === 'PLAYING' && !s.paused && !s.recovery ? qqAt(current.id) : escape(current.name) : '';
-            Object.assign(values, { gameId: s.gameId, version: String(s.version), status: t('status' + s.status), paused: s.paused ? t('paused') : '', recovery: s.recovery ? t('recovery') : '', stake: s.stake ? t('stake', { amount: String(s.stake) }) : t('free'), items: rows.filter(Boolean).join(config.historySeparator ?? t('playerSeparator')), timer, turn: s.game ? t('turn', { name: currentName, direction: t(s.game.direction === 1 ? 'forward' : 'reverse') }, ['name', 'direction']) : t('waiting') });
+            Object.assign(values, { gameId: s.gameId, version: String(s.version), status: t('status' + s.status), paused: s.paused ? t('paused') : '', recovery: s.recovery ? t('recovery') : '', stake: s.stake ? t('stake', { amount: prepared.stake }) : t('free'), items: rows.filter(Boolean).join(config.historySeparator ?? t('playerSeparator')), timer, turn: s.game ? t('turn', { name: currentName, direction: t(s.game.direction === 1 ? 'forward' : 'reverse') }, ['name', 'direction']) : t('waiting') });
+
+            if (s.challengeDate) { values.stake += '\n' + t('dailyLabel', { date: s.challengeDate }); }
+
+            if (s.showAIStyle && s.aiPersonality) { values.stake += '\n' + t('dealerStyle', { style: t('personality' + s.aiPersonality) }, ['style']); }
+
             raw.push('timer', 'status', 'paused', 'recovery', 'stake', 'items', 'turn');
 
             if (withButtons) { for (const action of s.status === 'WAITING' ? ['join', 'ready', 'start'] : s.status === 'PLAYING' ? ['choose', 'quit'] : []) { dynamic[action] = JSON.stringify({ gameId: s.gameId, expectedVersion: s.version, ...(action === 'choose' ? { menu: 0 } : { action: { type: action === 'quit' ? 'confirmQuit' : action } }) }); } }
         } else if (key === 'menu') {
             if (input.reason === 'menuSpectator' || input.reason === 'menuOtherTurn') { return { text: t(input.reason, { name: input.name ?? '' }), buttons: [] }; }
 
-            const s = input.room!, moves = input.moves ?? [], requested = input.offset ?? 0;
-            const offset = requested < moves.length ? requested : 0;
-            const canQuit = !input.reason && s.status === 'PLAYING' && !s.paused && !s.recovery && s.game?.players.some(p => p.id === input.actor && !p.ai && p.life > 0);
-            const capacity = canQuit ? 24 : 25;
-            const count = moves.length <= capacity ? capacity : capacity - 2;
-            const selected = moves.slice(offset, offset + count), players = s.game?.players ?? [];
-            const player = (id: string) => players.find(p => p.id === id)!;
-            values.items = selected.map((move, i) => move.type === 'shoot' ? t('menuShot', { number: String(i + 1), target: displayName(player(move.target)) }, ['target']) : move.type === 'item' ? t('menuItem', { number: String(i + 1), slot: String(move.slot + 1), item: t('item' + player(input.actor!).inventory[move.slot]), target: move.target ? t('target', { name: displayName(player(move.target)) }, ['name']) : '', stolen: move.stolenSlot !== undefined ? t('stolen', { slot: String(move.stolenSlot + 1), item: t('item' + player(move.target!).inventory[move.stolenSlot]) }, ['item']) : '', stolenTarget: move.stolenTarget ? t('stolenTarget', { name: displayName(player(move.stolenTarget)) }, ['name']) : '' }, ['item', 'target', 'stolen', 'stolenTarget']) : '').filter(Boolean).reduce((body, line, i) => body + (i ? t(selected[i].type !== selected[i - 1].type ? 'menuGroupSeparator' : 'menuSeparator') : '') + line, '');
-            values.panel = message(config, 'panel', { ...input, notice: undefined, mentionCurrent: input.mentionCurrent ?? false }, false).text;
+            const s = input.room!, moves = input.moves ?? [];
+            const { offset, count, canQuit, selected, players, menu } = prepared;
+            const player = (id: string) => players.get(id)!;
+            const lines = selected.map((entry, i) => {
+                const move = entry.display, number = String(i + 1);
+
+                if (entry.player) { return t('menuTarget', { number, target: displayName(player(entry.player)) }, ['target']); }
+
+                if (move.type === 'shoot') { return t('menuShot', { number, target: displayName(player(move.target)) }, ['target']); }
+
+                return move.type === 'item' ? t('menuItem', { number, slot: String(move.slot + 1), item: t('item' + (entry.item ?? player(input.actor!).inventory[move.slot])), target: '', stolen: '', stolenTarget: '' }, ['item']) : '';
+            });
+            values.items = lines.reduce((body, line, i) => body + (i ? t(selected[i].display.type !== selected[i - 1].display.type ? 'menuGroupSeparator' : 'menuSeparator') : '') + line, '');
+
+            if (menu.stage) { values.items = t(menu.stage, { item: t('item' + menu.item) }, ['item']) + '\n' + values.items; }
+
+            values.panel = message(config, 'panel', { ...input, notice: undefined, mentionCurrent: input.mentionCurrent ?? false }, false, prepared).text;
             raw.push('panel', 'items');
 
             if (withButtons) {
-                choices = selected.map(move => JSON.stringify({ gameId: s.gameId, expectedVersion: s.version, action: { type: 'play', move } }));
+                const base = { gameId: s.gameId, expectedVersion: s.version };
+                choices = selected.map(entry => JSON.stringify({ ...base, ...(entry.path ? { menu: 0, path: entry.path } : { action: { type: 'play', move: entry.move } }) }));
+
+                if (menu.path.length) { dynamic.menuBack = JSON.stringify({ ...base, menu: 0, path: menu.back }); }
 
                 if (canQuit) { dynamic.quit = JSON.stringify({ gameId: s.gameId, expectedVersion: s.version, action: { type: 'confirmQuit' } }); }
 
-                if (offset > 0) { dynamic.previous = JSON.stringify({ gameId: s.gameId, expectedVersion: s.version, menu: Math.max(0, offset - count) }); }
+                if (offset > 0) { dynamic.previous = JSON.stringify({ gameId: s.gameId, expectedVersion: s.version, path: menu.path, menu: Math.max(0, offset - count) }); }
 
-                if (offset + count < moves.length) { dynamic.next = JSON.stringify({ gameId: s.gameId, expectedVersion: s.version, menu: offset + count }); }
+                if (offset + count < menu.entries.length) { dynamic.next = JSON.stringify({ gameId: s.gameId, expectedVersion: s.version, path: menu.path, menu: offset + count }); }
             }
 
             if (!selected.length) { values.items = t(input.reason ?? 'menuEmpty', { name: input.name ?? '' }); }
@@ -133,7 +171,10 @@ export function createReplyPresentation(render: typeof renderTemplate, escape: t
             raw.push('mode');
 
             if (key === 'setupDifficulty') {
-                values.stake = Number(values.stake) ? t('stake', { amount: values.stake }) : t('free');
+                values.stake = Number(values.stake) ? t('stake', { amount: formatPoints(Number(values.stake)) }) : t('free');
+
+                if (values.challengeDate) { values.stake += '\n' + t('dailyLabel', { date: values.challengeDate }) + '\n' + t('dailyHint'); }
+
                 raw.push('stake');
             }
 
@@ -145,19 +186,33 @@ export function createReplyPresentation(render: typeof renderTemplate, escape: t
             const mode = values.mode;
             values.mode = t('mode' + mode);
             values.difficulty = mode === 'Solo' ? t('level' + values.difficulty) : t('humanMatch');
-            values.stake = Number(values.stake) ? t('stake', { amount: values.stake }) : t('free');
-            values.reward = values.reward ? (mode === 'Solo' ? t('soloReward', { amount: values.reward }) : t('multiReward')) : '';
+            values.stake = Number(values.stake) ? t('stake', { amount: formatPoints(Number(values.stake)) }) : t('free');
+
+            if (values.challengeDate) { values.stake += '\n' + t('dailyLabel', { date: values.challengeDate }) + '\n' + t('dailyHint'); }
+
+            values.reward = values.reward ? (mode === 'Solo' ? t('soloReward', { amount: formatPoints(Number(values.reward)) }) : t('multiReward')) : '';
             raw.push('mode', 'difficulty', 'stake', 'reward');
         } else if (key === 'error') {
             values.message = t(values.message || 'unknownError');
             raw.push('message');
         } else if (input.parts?.length) {
+            const link = input.parts.find(p => p.key === 'finish' || p.key === 'noWinner')?.values.replayUrl;
+
+            if (link?.startsWith('https://')) { dynamic.link = link; }
+
             return { text: input.parts.map(p => part(config, p)).filter(Boolean).join(t('eventSeparator')), buttons: withButtons ? buttons(config, key, dynamic, choices) : [] };
+        }
+
+        if (key === 'history') { raw.push('items'); }
+
+        if (key === 'help') {
+            values.modes = input.scene === 'c2c' ? '单人' : '单人|双人|多人';
+            values.roomCommands = input.scene === 'c2c' ? '退出|确认退出' : '加入|准备|开始|退出|确认退出';
         }
 
         const content = t(key, values, raw);
 
-        return { text: input.notice ? t(input.notice) + '\n' + content : content, buttons: withButtons ? buttons(config, key, dynamic, choices) : [] };
+        return { text: input.notice ? t(input.notice) + '\n' + content : content, buttons: withButtons ? buttons(config, key, dynamic, choices).map(row => key === 'lobby' && input.scene === 'c2c' ? row.filter(b => b.action !== 'duo' && b.action !== 'multi') : row).filter(row => row.length) : [] };
     }
 
     return { message, maxBytes };

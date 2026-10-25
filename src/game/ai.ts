@@ -1,8 +1,8 @@
-import { chooseDemon } from './demon.js';
-import { applyAction, legalActions, publicGame, copyPlayer, copyKnowledge } from './engine.js';
-import { secureRandom, type Action, type Game, type Knowledge, type RNG } from './types.js';
-
-export interface AIView { public: ReturnType<typeof publicGame>; knowledge: Knowledge; cursor: number }
+import { preference, type Personality } from './personality.js';
+import { chooseSearch } from './search.js';
+import type { AIView } from './observation.js';
+import { simulateAction, legalActions, publicGame, copyPlayer, copyKnowledge } from './engine.js';
+import { secureRandom, type Action, type Game, type RNG } from './types.js';
 
 export function observe(game: Game): AIView {
     return { public: publicGame(game), knowledge: copyKnowledge(game.knowledge[game.current]), cursor: game.cursor };
@@ -24,12 +24,12 @@ function world(view: AIView, possibility: number): Game {
 
     return {
         ...view.public, players: view.public.players.map(copyPlayer), cursor: view.cursor, shells: [...Array(view.cursor).fill(0), ...shells], shot: false,
-        knowledge: Object.fromEntries(view.public.players.map(p => [p.id, copyKnowledge(view.knowledge)]))
+        knowledge: Object.fromEntries(view.public.players.map(p => [p.id, { ...view.knowledge, known: { ...view.knowledge.known }, possibilities: view.knowledge.possibilities }]))
     };
 }
 
-export function chooseAction(view: AIView, level: number, rng: RNG = secureRandom, budgetMs = 4): Action {
-    if (level === 4) { return chooseDemon(view, budgetMs); }
+export function chooseAction(view: AIView, level: number, rng: RNG = secureRandom, budgetMs = 4, personality: Personality = 'balanced'): Action {
+    if (level >= 3) { return chooseSearch(view, budgetMs, undefined, personality, level === 3 ? 3 : 4); }
 
     const initial = world(view, 0), actor = initial.current, actions = legalActions(initial);
     const self = initial.players.find(p => p.id === actor)!;
@@ -61,31 +61,21 @@ export function chooseAction(view: AIView, level: number, rng: RNG = secureRando
 
     if (!ranked.length) { throw new Error('AI 无合法动作'); }
 
-    if (level === 0) { return ranked[rng(Math.min(3, ranked.length))].action; }
+    if (level === 0) {
+        const picked = ranked[rng(Math.min(3, ranked.length))];
 
-    if (level === 1) { return ranked[0].action; }
+        if (personality === 'balanced') { return picked.action; }
+
+        return ranked.slice(0, 3).filter(r => r.value === picked.value).reduce((a, b) => preference(view, b.action, personality) > preference(view, a.action, personality) ? b : a, picked).action;
+    }
+
+    if (level === 1) {
+        if (personality === 'balanced') { return ranked[0].action; }
+
+        return ranked.filter(r => r.value === ranked[0].value).reduce((a, b) => preference(view, b.action, personality) > preference(view, a.action, personality) ? b : a).action;
+    }
 
     const opponent = initial.players.find(p => p.id !== actor && p.life > 0)!;
-
-    if (level === 3) {
-        const use = (item: string) => ranked.find(({ action }) => action.type === 'item' && (self.inventory[action.slot] === 'adrenaline'
-            ? initial.players.find(p => p.id === action.target)!.inventory[action.stolenSlot!] : self.inventory[action.slot]) === item)?.action;
-        const damage = initial.saw ? 2 : 1;
-
-        if (probability === 1 && opponent.life <= damage) { return { type: 'shoot', target: opponent.id }; }
-
-        const heal = use('cigarette');
-
-        if (heal && self.life < 4) { return heal; }
-
-        const glass = use('glass');
-
-        if (glass && probability > 0 && probability < 1) { return glass; }
-
-        const saw = use('saw');
-
-        if (saw && probability === 1 && opponent.life > 1) { return saw; }
-    }
 
     // 无需让出行动权的确定收益先执行，避免浅层评价忽略情报与治疗价值。
     const forced = ranked.find(({ action }) => action.type === 'shoot' && action.target !== actor && probability === 1 && opponent.life <= (initial.saw ? 2 : 1))
@@ -101,7 +91,7 @@ export function chooseAction(view: AIView, level: number, rng: RNG = secureRando
 
     if (forced) { return forced.action; }
 
-    const start = performance.now(), cap = [0, 0, 40, 100][level] ?? 40;
+    const start = performance.now(), cap = 40;
     let nodes = 0;
     const seen = new Set<string>();
 
@@ -122,7 +112,7 @@ export function chooseAction(view: AIView, level: number, rng: RNG = secureRando
         for (const action of candidates) {
             if (nodes++ >= cap || performance.now() - start >= budgetMs) { break; }
 
-            const next = applyAction(state, state.current, action, rng).game;
+            const next = simulateAction(state, state.current, action, rng).game;
             const value = search(next, depth - 1);
             best = maximizing ? Math.max(best, value) : Math.min(best, value);
         }
@@ -150,7 +140,7 @@ export function chooseAction(view: AIView, level: number, rng: RNG = secureRando
                     break;
                 }
 
-                const sampled = world(view, sample), next = applyAction(sampled, actor, action, rng).game;
+                const sampled = world(view, sample), next = simulateAction(sampled, actor, action, rng).game;
                 nodes++;
                 sum += search(next, depth);
             }
@@ -159,7 +149,7 @@ export function chooseAction(view: AIView, level: number, rng: RNG = secureRando
 
             const value = sum / samples.length + heuristic * 3;
 
-            if (value > best) {
+            if (value > best || personality !== 'balanced' && value === best && preference(view, action, personality) > preference(view, chosen, personality)) {
                 best = value;
                 chosen = action;
             }

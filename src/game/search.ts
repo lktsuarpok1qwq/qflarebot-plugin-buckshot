@@ -1,4 +1,6 @@
-import type { AIView } from './ai.js';
+import { SEARCH_POLICIES } from './search-policy.js';
+import { preference, type Personality } from './personality.js';
+import type { AIView } from './observation.js';
 import type { Action, Item } from './types.js';
 
 interface Position {
@@ -8,7 +10,15 @@ interface Position {
 interface Move { item?: Item; self?: boolean; steal?: boolean }
 
 // 弹药位图来自自身的合法可能排列；对手的私密知识、实际弹仓和 RNG 不进入模型。
-export function chooseDemon(view: AIView, budgetMs: number, diagnostics?: { nodes: number; depth: number }): Action {
+export function chooseSearch(view: AIView, budgetMs: number, diagnostics?: { nodes: number; depth: number }, personality: Personality = 'balanced', level: 3 | 4 = 4): Action {
+    const started = performance.now();
+    const policy = SEARCH_POLICIES[level];
+
+    if (diagnostics) {
+        diagnostics.nodes = 0;
+        diagnostics.depth = 0;
+    }
+
     const own = view.public.players.find(p => p.id === view.public.current)!;
     const enemy = view.public.players.find(p => p.id !== own.id && p.life > 0)!;
     const initial: Position = {
@@ -18,7 +28,60 @@ export function chooseDemon(view: AIView, budgetMs: number, diagnostics?: { node
         control: [own, enemy].map(p => p.control === 'skip' ? 1 : p.control === 'release' ? 2 : 0),
         actor: 0, saw: view.public.saw
     };
-    const probability = (s: Position) => s.shells.reduce((sum, mask) => sum + (mask & 1), 0) / s.shells.length;
+    // 同一合法弹序集合的概率、分组和移位只算一次，物品消耗复用只读库存。
+    const distributionKeys = new Map<string, number[]>();
+    const distributions = new WeakMap<number[], { key: string; p: number; subsets: number[][]; shifted: number[][]; inverted?: number[] }>();
+    const intern = (values: number[]) => {
+        const key = values.join(',');
+        const previous = distributionKeys.get(key);
+
+        if (previous) { return previous; }
+
+        distributionKeys.set(key, values);
+
+        return values;
+    };
+    const distribution = (shells: number[]) => {
+        let result = distributions.get(shells);
+
+        if (!result) {
+            const subsets: number[][] = [[], []];
+
+            for (const mask of shells) { subsets[mask & 1].push(mask); }
+
+            result = {
+                key: shells.join(','), p: subsets[1].length / shells.length,
+                subsets: subsets.map(intern), shifted: subsets.map(values => intern(values.map(mask => mask >>> 1)))
+            };
+            distributions.set(shells, result);
+        }
+
+        return result;
+    };
+    const probability = (s: Position) => distribution(s.shells).p;
+    const hands = new WeakMap<Item[], { key: string; used: Map<Item, Item[]> }>();
+    const hand = (values: Item[]) => {
+        let result = hands.get(values);
+
+        if (!result) {
+            result = { key: [...values].sort().join(','), used: new Map() };
+            hands.set(values, result);
+        }
+
+        return result;
+    };
+    const consume = (values: Item[], item: Item) => {
+        const entry = hand(values);
+        let result = entry.used.get(item);
+
+        if (!result) {
+            result = values.slice();
+            result.splice(result.indexOf(item), 1);
+            entry.used.set(item, result);
+        }
+
+        return result;
+    };
     const available = (s: Position, item: Item): Move | undefined => s.hands[s.actor].includes('adrenaline') && s.hands[1 - s.actor].includes(item)
         ? { item, steal: true } : s.hands[s.actor].includes(item) ? { item } : undefined;
 
@@ -38,6 +101,16 @@ export function chooseDemon(view: AIView, budgetMs: number, diagnostics?: { node
 
         if (p === 1 && s.hp[b] <= (s.saw ? 2 : 1)) { return [{ self: false }]; }
 
+        if (level === 4) {
+            const saw = available(s, 'saw');
+
+            if (saw && !s.saw && p === 1 && s.hp[b] > 1) { return [saw]; }
+
+            const cuffs = available(s, 'cuffs');
+
+            if (cuffs && s.control[b] === 0 && s.remaining > 1 && p === 1) { return [cuffs]; }
+        }
+
         const heal = available(s, 'cigarette');
 
         if (heal && s.hp[a] < 4) { return [heal]; }
@@ -54,7 +127,7 @@ export function chooseDemon(view: AIView, budgetMs: number, diagnostics?: { node
             for (const item of new Set(s.hands[steal ? b : a])) {
                 if (item === 'saw' && !s.saw && p > 0
                     || item === 'inverter' && p < 1
-                    || item === 'beer' && (p > 0 && p < 1 || p === 0 && s.saw)
+                    || item === 'beer' && (p > 0 && (p < 1 || level === 4) || p === 0 && s.saw)
                     || (item === 'cuffs' || item === 'jammer') && s.control[b] === 0 && s.remaining > 1 && p > 0
                     || item === 'medicine' && s.hp[a] < 3) { result.push({ item, steal }); }
             }
@@ -67,6 +140,9 @@ export function chooseDemon(view: AIView, budgetMs: number, diagnostics?: { node
     // 情报道具不交出行动权；电话只在可抽到的位置仍有未知时使用。
     const phone: Move | undefined = own.inventory.includes('phone') ? { item: 'phone' } : undefined;
     const rootOptions = options(initial);
+
+    // 两发弹时电话与放大镜同样能确定当前弹，优先保留放大镜。
+    if (level === 4 && phone && initial.remaining === 2 && p > 0 && p < 1) { return translate(phone); }
 
     if (rootOptions.length === 1) { return translate(rootOptions[0]); }
 
@@ -83,12 +159,12 @@ export function chooseDemon(view: AIView, budgetMs: number, diagnostics?: { node
 
         const hand = (i: number) => s.hands[i].reduce((sum, item) => sum + (values[item] || 0), 0);
 
-        return (s.hp[0] - s.hp[1]) * 10 + hand(0) - hand(1) + (s.actor === 0 ? 8 : -8)
-            + (s.control[1] === 1 ? 5 : 0) - (s.control[0] === 1 ? 5 : 0);
+        return Math.max(-99, Math.min(99, (s.hp[0] - s.hp[1]) * 10 + hand(0) - hand(1) + (s.actor === 0 ? 1 : -1) * policy.tempo
+            + (s.control[1] === 1 ? 5 : 0) - (s.control[0] === 1 ? 5 : 0)));
     }
 
     function copy(s: Position): Position {
-        return { ...s, hp: [...s.hp], hands: s.hands.map(h => [...h]), control: [...s.control] };
+        return { ...s, hp: [...s.hp], hands: s.hands.slice(), control: [...s.control] };
     }
 
     function advance(s: Position): void {
@@ -107,9 +183,11 @@ export function chooseDemon(view: AIView, budgetMs: number, diagnostics?: { node
         const next = copy(s), a = s.actor, b = 1 - a;
 
         if (move.item) {
-            next.hands[a].splice(next.hands[a].indexOf(move.steal ? 'adrenaline' : move.item), 1);
+            next.hands[a] = consume(next.hands[a], move.steal ? 'adrenaline' : move.item);
 
-            if (move.steal) { next.hands[b].splice(next.hands[b].indexOf(move.item), 1); }
+            if (move.steal) {
+                next.hands[b] = consume(next.hands[b], move.item);
+            }
 
             if (move.item === 'medicine') {
                 const loss = copy(next);
@@ -125,16 +203,17 @@ export function chooseDemon(view: AIView, budgetMs: number, diagnostics?: { node
 
             if (move.item === 'cuffs' || move.item === 'jammer') { next.control[b] = 1; }
 
-            if (move.item === 'inverter') { next.shells = next.shells.map(mask => mask ^ 1); }
+            if (move.item === 'inverter') {
+                const entry = distribution(next.shells);
+                next.shells = entry.inverted ??= intern(next.shells.map(mask => mask ^ 1));
+            }
 
             if (move.item !== 'beer' && move.item !== 'glass') { return [[next, 1]]; }
         }
 
         const result: [Position, number][] = [];
 
-        const subsets: number[][] = [[], []];
-
-        for (const mask of s.shells) { subsets[mask & 1].push(mask); }
+        const { subsets, shifted } = distribution(s.shells);
 
         for (const shell of [0, 1]) {
             const subset = subsets[shell];
@@ -145,7 +224,7 @@ export function chooseDemon(view: AIView, budgetMs: number, diagnostics?: { node
             branch.shells = subset;
 
             if (move.item !== 'glass') {
-                branch.shells = subset.map(mask => mask >>> 1);
+                branch.shells = shifted[shell];
                 branch.remaining--;
 
                 if (!move.item) {
@@ -168,48 +247,70 @@ export function chooseDemon(view: AIView, budgetMs: number, diagnostics?: { node
         return result;
     }
 
-    const started = performance.now(), exhausted = Symbol('budget'), cache = new Map<string, number>();
+    const exhausted = Symbol('budget'), cache = new Map<string, number>();
     let nodes = 0;
 
-    function search(s: Position, depth: number): number {
+    function search(s: Position, depth: number, alpha = -100, beta = 100): number {
         if (!depth || !s.remaining || s.hp.some(hp => hp <= 0)) { return evaluate(s); }
 
-        if (nodes >= 2400 || performance.now() - started >= budgetMs) { throw exhausted; }
+        if (nodes >= policy.nodes || performance.now() - started >= budgetMs) { throw exhausted; }
 
-        const key = `${depth}|${s.remaining}|${s.actor}|${+s.saw}|${s.hp.join(',')}|${s.control.join(',')}|${s.hands[0].join(',')}|${s.hands[1].join(',')}|${s.shells.join(',')}`, previous = cache.get(key);
+        const key = `${depth}|${s.remaining}|${s.actor}|${+s.saw}|${s.hp.join(',')}|${s.control.join(',')}|${hand(s.hands[0]).key}|${hand(s.hands[1]).key}|${distribution(s.shells).key}`, previous = cache.get(key);
 
         if (previous !== undefined) { return previous; }
 
         nodes++;
-        const moves = options(s);
+        const moves = options(s), originalAlpha = alpha, originalBeta = beta;
         const forced = moves.length === 1 && moves[0].item !== undefined;
-        let result = s.actor === 0 ? -Infinity : Infinity;
+        let result = s.actor === 0 ? -100 : 100;
 
         for (const move of moves) {
-            const score = value(s, move, depth + (forced ? 1 : 0));
+            const score = value(s, move, depth + (forced ? 1 : 0), alpha, beta);
             result = s.actor === 0 ? Math.max(result, score) : Math.min(result, score);
+
+            if (level === 4) {
+                if (s.actor === 0) { alpha = Math.max(alpha, result); } else { beta = Math.min(beta, result); }
+
+                if (alpha >= beta) { break; }
+            }
         }
 
-        cache.set(key, result);
+        // 仅缓存精确值；剪枝边界不能作为下一深度或另一个窗口的结果。
+        if (level === 3 || result > originalAlpha && result < originalBeta) { cache.set(key, result); }
 
         return result;
     }
 
-    function value(s: Position, move: Move, depth: number): number {
-        return branches(s, move).reduce((sum, [branch, chance]) => sum + chance * search(branch, depth - 1), 0);
+    function value(s: Position, move: Move, depth: number, alpha = -100, beta = 100): number {
+        const outcomes = branches(s, move);
+        let sum = 0, remaining = 1;
+
+        for (const [branch, chance] of outcomes) {
+            remaining = Math.max(0, remaining - chance);
+            // 未探索概率分支的上下界均来自合法评分范围，不预知真实弹种。
+            const lower = level === 4 ? Math.max(-100, (alpha - sum - remaining * 100) / chance) : -100;
+            const upper = level === 4 ? Math.min(100, (beta - sum + remaining * 100) / chance) : 100;
+            sum += chance * search(branch, depth - 1, lower, upper);
+
+            if (level === 4 && sum + remaining * 100 < alpha) { return sum + remaining * 100; }
+
+            if (level === 4 && sum - remaining * 100 > beta) { return sum - remaining * 100; }
+        }
+
+        return sum;
     }
 
     // 完整比较一轮后才接纳结果；超时保留上一完整轮次，基础射击始终合法。
     let chosen = rootOptions[0];
 
-    for (let depth = 1; depth <= 10; depth++) {
+    for (let depth = 1; depth <= policy.depth; depth++) {
         try {
             let best = -Infinity, candidate = chosen;
 
             for (const move of rootOptions) {
-                const score = value(initial, move, depth);
+                const score = value(initial, move, depth, level === 4 ? best - 1e-9 : -100, 100);
 
-                if (score > best) {
+                if (score > best || personality !== 'balanced' && score === best && preference(view, translate(move), personality) > preference(view, translate(candidate), personality)) {
                     best = score;
                     candidate = move;
                 }

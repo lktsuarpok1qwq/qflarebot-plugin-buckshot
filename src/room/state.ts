@@ -1,7 +1,12 @@
+import { roomRandom, type RandomState } from '../game/random.js';
+import { PERSONALITIES } from '../game/personality.js';
+import { secureRandom } from '../game/types.js';
+import { replayLink } from '../replay/access.js';
+import { isPrivateScope } from '../conversation.js';
 import { DEFAULT_REPLIES, renderTemplate } from '../templates/replies.js';
 import { applyAction, createGame, publicGame } from '../game/engine.js';
 import { chooseAction, observe } from '../game/ai.js';
-import { requireRule, type GameEvent } from '../game/types.js';
+import { requireRule, type Action, type GameEvent } from '../game/types.js';
 import { payout } from '../config.js';
 import type { RoomState, Request, Task } from './model.js';
 
@@ -74,7 +79,7 @@ export function events(s: RoomState, values: GameEvent[], oldTurn: number, now: 
         } else if (event.type !== 'load' && event.type !== 'finish') {
             summary.push(event.message!);
         } else {
-            enqueue(s, event.text, event.type === 'load' || event.type === 'finish', undefined, event.type === 'load' ? event.loadId : undefined).parts = [event.message!];
+            enqueue(s, event.text, event.type === 'load' || event.type === 'finish', undefined, event.type === 'load' ? event.loadId : undefined).parts = [{ ...event.message!, values: { ...event.message!.values, ...(event.type === 'finish' && s.replay?.key ? { replayUrl: replayLink(s.replay.key, s.replay.base) } : {}) } }];
         }
     }
 
@@ -102,7 +107,14 @@ export function startGame(s: RoomState, now: number): void {
 
     if (s.mode === 'solo') { players.push({ id: 'ai', name: '庄家', ai: true }); }
 
-    const result = createGame(s.mode, players);
+    if (s.challenge) {
+        s.gameRandom = s.challenge.seed.slice(0, 4) as RandomState;
+        s.aiRandom = s.challenge.seed.slice(4) as RandomState;
+    }
+
+    if (s.mode === 'solo') { s.aiPersonality = PERSONALITIES[s.challenge ? s.challenge.seed[7] % PERSONALITIES.length : secureRandom(PERSONALITIES.length)]; }
+
+    const result = createGame(s.mode, players, roomRandom(s));
     s.game = result.game;
     s.status = 'PLAYING';
     events(s, result.events, -1, now);
@@ -110,7 +122,7 @@ export function startGame(s: RoomState, now: number): void {
     for (const id of s.departures ?? []) {
         if (s.game.finished) { break; }
 
-        const turn = s.game.turn, oldCurrent = s.game.current, removed = applyAction(s.game, id, { type: 'eliminate', target: id });
+        const turn = s.game.turn, oldCurrent = s.game.current, removed = applyAction(s.game, id, { type: 'eliminate', target: id }, roomRandom(s));
         s.game = removed.game;
         events(s, removed.events, turn, now, oldCurrent);
     }
@@ -123,6 +135,7 @@ export function reserve(s: RoomState, now: number): void {
     s.money.push({
         id: `${s.gameId}:reserve`, kind: 'reserve', state: 'PENDING', input: {
             source: 'buckshot', operationId: `${s.gameId}:reserve`, referenceId: `buckshot:${s.gameId}`, expiresAtMs: s.reserveUntil,
+            reason: `恶魔轮盘：冻结对局本金，从可用余额转入冻结余额；房间 ${s.gameId}`,
             funds: s.members.map((m, i) => ({ userId: m.id, amountMinor: s.stake, reservationId: `${s.gameId}:r:${i}` }))
         }
     });
@@ -136,7 +149,8 @@ export function settlement(s: RoomState): void {
     if (!s.game?.winner || s.status === 'CANCELLED') {
         s.members.forEach((_, i) => s.money.push({
             id: `${s.gameId}:release:${i}`, kind: 'release', state: 'PENDING', input: {
-                source: 'buckshot', operationId: `${s.gameId}:release:${i}`, referenceId: `buckshot:${s.gameId}`, reservationId: `${s.gameId}:r:${i}`
+                source: 'buckshot', operationId: `${s.gameId}:release:${i}`, referenceId: `buckshot:${s.gameId}`, reservationId: `${s.gameId}:r:${i}`,
+                reason: `恶魔轮盘：${s.status === 'CANCELLED' ? '对局取消' : '对局无胜者'}，退回冻结本金；房间 ${s.gameId}`
             }
         }));
     } else {
@@ -145,6 +159,7 @@ export function settlement(s: RoomState): void {
         s.money.push({
             id: `${s.gameId}:settle`, kind: 'settle', state: 'PENDING', input: {
                 source: 'buckshot', operationId: `${s.gameId}:settle`, referenceId: `buckshot:${s.gameId}`,
+                reason: `恶魔轮盘：${aiWon ? '人机对局失败，扣除冻结本金' : s.mode === 'solo' ? '人机对局获胜，返还本金并发放奖励' : '真人对局结算，冻结本金池发放给胜者'}；房间 ${s.gameId}`,
                 funds: s.members.map((_, i) => ({ reservationId: `${s.gameId}:r:${i}`, payouts: aiWon ? [] : [{ userId: winner, amountMinor: s.stake }], burnMinor: aiWon ? s.stake : 0 })),
                 rewards: reward > 0 ? [{ userId: winner, amountMinor: reward }] : []
             }
@@ -178,6 +193,7 @@ export function mutate(s: RoomState, request: Request, admin: boolean, now: numb
     const member = s.members.find(p => p.id === id);
 
     if (a.type === 'join') {
+        requireRule(!isPrivateScope(s.groupId), '私聊只支持单人对局');
         requireRule(s.status === 'WAITING' && s.mode !== 'solo' && s.members.length < (s.mode === 'duo' ? 2 : 4), '当前不能加入');
         requireRule(!member && a.member.id === id, '已加入或身份不符');
         s.members.push({ ...a.member, name: playerName(a.member.name, s.members) });
@@ -219,7 +235,7 @@ export function mutate(s: RoomState, request: Request, admin: boolean, now: numb
         if (a.type === 'quit') { requireRule(member && s.confirmations[id]?.version === s.version && s.confirmations[id].expires > now, '请重新确认认输'); }
 
         requireRule(s.status === 'PLAYING' && s.game, '当前不能淘汰玩家');
-        const oldTurn = s.game.turn, oldCurrent = s.game.current, result = applyAction(s.game, target, { type: 'eliminate', target });
+        const oldTurn = s.game.turn, oldCurrent = s.game.current, result = applyAction(s.game, target, { type: 'eliminate', target }, roomRandom(s));
         s.game = result.game;
         events(s, result.events, oldTurn, now, oldCurrent);
         delete s.confirmations[target];
@@ -227,7 +243,7 @@ export function mutate(s: RoomState, request: Request, admin: boolean, now: numb
         requireRule(member && s.status === 'PLAYING' && s.game && !s.outbox.some(t => t.critical && t.state !== 'SENT'), '当前不能操作');
         requireRule(a.move.type === 'shoot' || a.move.type === 'item', '操作类型无效');
         requireRule(s.deadline !== undefined && s.deadline > now, '操作时间已到');
-        const oldTurn = s.game.turn, oldCurrent = s.game.current, result = applyAction(s.game, id, a.move);
+        const oldTurn = s.game.turn, oldCurrent = s.game.current, result = applyAction(s.game, id, a.move, roomRandom(s));
         s.game = result.game;
         events(s, result.events, oldTurn, now, oldCurrent);
     } else if (a.type === 'pause') {
@@ -277,7 +293,7 @@ export function mutate(s: RoomState, request: Request, admin: boolean, now: numb
     clock(s, now);
 }
 
-export function tick(s: RoomState, now: number, immediateAI = false): void {
+export function tick(s: RoomState, now: number, immediateAI = false, onAction?: (actor: string, move: Action) => void): void {
     for (const task of s.outbox) {
         if (task.state === 'PENDING' && task.expiresAt !== undefined && task.expiresAt <= now) { task.state = 'FAILED'; }
 
@@ -312,16 +328,18 @@ export function tick(s: RoomState, now: number, immediateAI = false): void {
     const game = s.game!, oldTurn = game.turn, oldCurrent = game.current;
 
     if (s.deadline <= now) {
-        const result = applyAction(game, game.current, { type: 'timeout' });
+        const result = applyAction(game, game.current, { type: 'timeout' }, roomRandom(s));
+        onAction?.(oldCurrent, { type: 'timeout' });
         s.game = result.game;
         s.version++;
         events(s, result.events, oldTurn, now, oldCurrent);
     } else if (s.aiDue !== undefined && (immediateAI || s.aiDue <= now)) {
         let move;
 
-        try { move = chooseAction(observe(game), s.difficulty, undefined, s.config.values.aiBudgetMs); } catch { move = { type: 'shoot' as const, target: game.players.find(p => p.life > 0 && p.id !== game.current)!.id }; }
+        try { move = chooseAction(observe(game), s.difficulty, roomRandom(s, true), s.challenge ? Infinity : s.config.values.aiBudgetMs, s.aiPersonality); } catch { move = { type: 'shoot' as const, target: game.players.find(p => p.life > 0 && p.id !== game.current)!.id }; }
 
-        const result = applyAction(game, game.current, move);
+        const result = applyAction(game, game.current, move, roomRandom(s));
+        onAction?.(oldCurrent, move);
         s.game = result.game;
         s.version++;
         events(s, result.events, oldTurn, now, oldCurrent);
@@ -333,12 +351,17 @@ export function tick(s: RoomState, now: number, immediateAI = false): void {
     }
 }
 
+export function pendingTasks(s: RoomState) {
+    return s.outbox.filter(t => t.state !== 'SENT').map(({ id, state, private: secret, attempts, kind, error }) => ({ id, state, secret, attempts, kind, ...(error !== undefined ? { error } : {}) }));
+}
+
 export function view(s: RoomState) {
     return {
+        ...(s.challenge ? { challengeDate: s.challenge.date } : {}), ...(s.aiPersonality ? { aiPersonality: s.aiPersonality } : {}),
         gameId: s.gameId, groupId: s.groupId, version: s.version, status: s.status, mode: s.mode, stake: s.stake, difficulty: s.difficulty,
-        recallSeconds: s.config.values.recallSeconds, host: s.host, members: s.members.map(({ id, name, ready }) => ({ id, name, ready })), paused: s.paused, recovery: s.recovery,
+        showAIStyle: s.config.values.showAIStyle === true, recallSeconds: s.config.values.recallSeconds, host: s.host, members: s.members.map(({ id, name, ready, claimId, nameLookupAt }) => ({ id, name, ready, ...(claimId !== undefined ? { claimId } : {}), ...(nameLookupAt !== undefined ? { nameLookupAt } : {}) })), paused: s.paused, recovery: s.recovery,
         ...(s.reason !== undefined ? { reason: s.reason } : {}), ...(s.deadline !== undefined ? { deadline: s.deadline } : {}), remainingMs: s.remainingMs, ...(s.aiReadUntil !== undefined ? { aiReadUntil: s.aiReadUntil } : {}), ...(s.game ? { game: publicGame(s.game) } : {}),
-        tasks: s.outbox.filter(t => t.state !== 'SENT').map(({ id, state, private: secret, attempts, kind, error }) => ({ id, state, secret, attempts, kind, ...(error !== undefined ? { error } : {}) })),
+        tasks: pendingTasks(s),
         funds: s.money.map(({ id, kind, state }) => ({ id, kind, state }))
     };
 }

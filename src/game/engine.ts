@@ -7,8 +7,8 @@ export function copyKnowledge(k: Knowledge): Knowledge {
     return { ...k, known: { ...k.known }, possibilities: k.possibilities.map(p => p.slice()) };
 }
 
-function copyGame(game: Game): Game {
-    return { ...game, players: game.players.map(copyPlayer), shells: game.shells.slice(), knowledge: Object.fromEntries(Object.entries(game.knowledge).map(([id, k]) => [id, copyKnowledge(k)])) };
+function copyGame(game: Game, search: boolean): Game {
+    return { ...game, players: game.players.map(copyPlayer), shells: game.shells.slice(), knowledge: Object.fromEntries(Object.entries(game.knowledge).map(([id, k]) => [id, search ? { ...k, known: { ...k.known }, possibilities: k.possibilities } : copyKnowledge(k)])) };
 }
 
 function player(game: Game, id: string): Player {
@@ -214,8 +214,8 @@ function useItem(game: Game, actor: Player, item: Item, target: string | undefin
     }
 }
 
-export function applyAction(input: Game, actorId: string, action: Action, rng: RNG = secureRandom): { game: Game; events: GameEvent[] } {
-    const game = copyGame(input), events: GameEvent[] = [];
+function transition(input: Game, actorId: string, action: Action, rng: RNG, search: boolean): { game: Game; events: GameEvent[] } {
+    const game = copyGame(input, search), events: GameEvent[] = [];
     requireRule(!game.finished, '对局已结束');
     const actor = player(game, actorId);
     let pass = false;
@@ -274,6 +274,15 @@ export function applyAction(input: Game, actorId: string, action: Action, rng: R
     }
 
     return { game, events };
+}
+
+export function applyAction(input: Game, actorId: string, action: Action, rng: RNG = secureRandom) {
+    return transition(input, actorId, action, rng, false);
+}
+
+// 搜索内部的弹序行只读；消费、情报筛选和逆转均生成新数组，不暴露为真实游戏副本。
+export function simulateAction(input: Game, actorId: string, action: Action, rng: RNG) {
+    return transition(input, actorId, action, rng, true);
 }
 
 export function publicGame(game: Game) {

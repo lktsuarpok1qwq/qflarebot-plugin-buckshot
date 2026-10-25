@@ -1,14 +1,16 @@
+import { statisticsDDL } from '../statistics/store.js';
 import type { PluginContext } from '@qqbot/sdk';
-import { DEFAULTS, identifier, validateConfig, type Config, type ConfigSnapshot } from '../config.js';
+import { identifier, validateConfig, type ConfigSnapshot } from '../config.js';
 import { requireRule } from '../game/types.js';
 
-export const DATABASE_VERSION = 4;
+export const DATABASE_VERSION = 5;
 
 export async function ensureDatabase(ctx: PluginContext): Promise<void> {
     async function marker() { return ctx.db.first<{ version: number }>('SELECT version FROM {meta} WHERE id=1'); }
 
     try {
         const row = await marker();
+
         requireRule(row?.version === DATABASE_VERSION, '业务数据版本不匹配');
 
         return;
@@ -25,6 +27,7 @@ export async function ensureDatabase(ctx: PluginContext): Promise<void> {
         "CREATE INDEX {rooms_open} ON {rooms}(bot,group_id) WHERE status<>'CLOSED'",
         'CREATE TABLE {coord_ops} (bot TEXT NOT NULL, id TEXT NOT NULL, game_id TEXT NOT NULL, request TEXT NOT NULL, state TEXT NOT NULL, expires_at INTEGER, PRIMARY KEY(bot,game_id,id))',
         'CREATE INDEX {coord_expiry} ON {coord_ops}(bot,state,expires_at)',
+        ...statisticsDDL(),
         `INSERT INTO {meta}(id,version) VALUES(1,${DATABASE_VERSION})`
     ];
 
@@ -36,24 +39,38 @@ export async function ensureDatabase(ctx: PluginContext): Promise<void> {
     }
 }
 
-export async function configView(ctx: PluginContext, group: string) {
-    const rows = await ctx.db.all<{ scope: string; version: number; value: string }>('SELECT scope,version,value FROM {config} WHERE bot=? AND scope IN (?,?)', ctx.botId, '*', group);
-    const global = rows.find(r => r.scope === '*'), local = rows.find(r => r.scope === group);
-    const values = { ...DEFAULTS, ...JSON.parse(global?.value ?? '{}'), ...JSON.parse(local?.value ?? '{}') } as Config;
-    validateConfig(values);
+// 每个机器人只使用一个固定配置记录；会话不参与配置查找。
+export async function configView(ctx: PluginContext) {
+    const row = await ctx.db.first<{ version: number; value: string }>("SELECT version,value FROM {config} WHERE bot=? AND scope='*'", ctx.botId);
+    const values = validateConfig(JSON.parse(row?.value ?? '{}'));
 
-    return { scope: group, version: local?.version ?? 0, value: JSON.parse(local?.value ?? '{}') as Partial<Config>, effective: { values, globalVersion: global?.version ?? 0, groupVersion: local?.version ?? 0, ruleVersion: 1 as const } };
+    return { version: row?.version ?? 0, value: values, effective: { values, globalVersion: row?.version ?? 0, ruleVersion: 1 as const } };
 }
 
-export async function readConfig(ctx: PluginContext, group: string): Promise<ConfigSnapshot> { return (await configView(ctx, group)).effective; }
+export async function readConfig(ctx: PluginContext): Promise<ConfigSnapshot> {
+    return (await configView(ctx)).effective;
+}
 
-export async function saveConfig(ctx: PluginContext, input: { scope: string; operationId: string; version: number; value: unknown }) {
+// 每个事件独立持有；仅复用当前机器人本次请求的读取，不跨请求缓存。
+export interface RequestConfig { read?: { botId: string; value: Promise<ConfigSnapshot> } }
+
+export function readRequestConfig(ctx: PluginContext, request?: RequestConfig): Promise<ConfigSnapshot> {
+    if (!request) { return readConfig(ctx); }
+
+    if (request.read?.botId !== ctx.botId) {
+        request.read = { botId: ctx.botId, value: readConfig(ctx) };
+    }
+
+    return request.read.value;
+}
+
+export async function saveConfig(ctx: PluginContext, input: { operationId: string; version: number; value: unknown }) {
     identifier(input.operationId);
 
-    if (input.scope !== '*') { identifier(input.scope); }
+    requireRule(Object.keys(input).every(key => ['operationId', 'version', 'value'].includes(key)), '配置请求字段无效');
 
     requireRule(Number.isSafeInteger(input.version) && input.version >= 0, '配置版本无效');
-    const value = validateConfig(input.value, true), request = JSON.stringify({ ...input, value });
+    const value = validateConfig(input.value), request = JSON.stringify({ ...input, value });
     const old = await ctx.db.first<{ request: string; result: string }>('SELECT request,result FROM {config_ops} WHERE bot=? AND id=?', ctx.botId, input.operationId);
 
     if (old) {
@@ -65,12 +82,12 @@ export async function saveConfig(ctx: PluginContext, input: { scope: string; ope
         return result;
     }
 
-    const result = { scope: input.scope, version: input.version + 1, value, operationId: input.operationId };
-    const rejected = { scope: input.scope, operationId: input.operationId, status: 'REJECTED', error: '配置已被修改，请重新加载并保留草稿' };
+    const result = { version: input.version + 1, value, operationId: input.operationId };
+    const rejected = { operationId: input.operationId, status: 'REJECTED', error: '配置已被修改，请重新加载并保留草稿' };
     const batch = await ctx.db.batch([
-        { sql: 'INSERT OR IGNORE INTO {config}(bot,scope,version,value,op) VALUES(?,?,0,?,?)', params: [ctx.botId, input.scope, '{}', ''] },
-        { sql: 'UPDATE {config} SET version=version+1,value=?,op=? WHERE bot=? AND scope=? AND version=? AND NOT EXISTS (SELECT 1 FROM {config_ops} WHERE bot=? AND id=?)', params: [JSON.stringify(value), input.operationId, ctx.botId, input.scope, input.version, ctx.botId, input.operationId] },
-        { sql: 'INSERT OR IGNORE INTO {config_ops}(bot,id,request,result) SELECT ?,?,?,? WHERE EXISTS (SELECT 1 FROM {config} WHERE bot=? AND scope=? AND op=? AND version=?)', params: [ctx.botId, input.operationId, request, JSON.stringify(result), ctx.botId, input.scope, input.operationId, result.version] },
+        { sql: 'INSERT OR IGNORE INTO {config}(bot,scope,version,value,op) VALUES(?,?,0,?,?)', params: [ctx.botId, '*', '{}', ''] },
+        { sql: "UPDATE {config} SET version=version+1,value=?,op=? WHERE bot=? AND scope='*' AND version=? AND NOT EXISTS (SELECT 1 FROM {config_ops} WHERE bot=? AND id=?)", params: [JSON.stringify(value), input.operationId, ctx.botId, input.version, ctx.botId, input.operationId] },
+        { sql: 'INSERT OR IGNORE INTO {config_ops}(bot,id,request,result) SELECT ?,?,?,? WHERE EXISTS (SELECT 1 FROM {config} WHERE bot=? AND scope=? AND op=? AND version=?)', params: [ctx.botId, input.operationId, request, JSON.stringify(result), ctx.botId, '*', input.operationId, result.version] },
         { sql: 'INSERT OR IGNORE INTO {config_ops}(bot,id,request,result) VALUES(?,?,?,?)', params: [ctx.botId, input.operationId, request, JSON.stringify(rejected)] }
     ]);
 

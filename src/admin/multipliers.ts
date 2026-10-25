@@ -1,3 +1,5 @@
+import { parsePoints } from '../amounts.js';
+
 // 管理端以十进制文本提交倍率；按十进制位拼接，避免浮点乘法及静默舍入。
 // 此纯函数同时嵌入页面，服务端始终独立调用校验。
 export function parseMultiplier(input: unknown): number {
@@ -14,11 +16,19 @@ export function parseMultiplier(input: unknown): number {
 }
 
 export function decodeAdminConfig(input: unknown): unknown {
-    if (!input || typeof input !== 'object' || Array.isArray(input) || !Object.hasOwn(input, 'multipliers')) { return input; }
+    if (!input || typeof input !== 'object' || Array.isArray(input)) { return input; }
 
-    const value = input as Record<string, unknown>;
+    const value = { ...input } as Record<string, unknown>;
 
-    if (!Array.isArray(value.multipliers) || value.multipliers.length !== 5) { throw new Error('请填写五档倍率'); }
+    for (const key of ['minStake', 'maxStake', 'rewardLimit']) {
+        if (Object.hasOwn(value, key)) { value[key] = parsePoints(value[key], key === 'rewardLimit'); }
+    }
 
-    return { ...value, multipliers: value.multipliers.map(parseMultiplier) };
+    if (Object.hasOwn(value, 'multipliers')) {
+        if (!Array.isArray(value.multipliers) || value.multipliers.length !== 5) { throw new Error('请填写五档倍率'); }
+
+        value.multipliers = value.multipliers.map(parseMultiplier);
+    }
+
+    return value;
 }

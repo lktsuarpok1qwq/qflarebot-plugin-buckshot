@@ -1,3 +1,5 @@
+import { statisticsRoutes } from '../statistics/routes.js';
+import { replayRoutes } from '../replay/routes.js';
 import type { Route } from '@qqbot/sdk';
 import type { PointsService } from 'qflarebot-plugin-points';
 import { identifier } from '../config.js';
@@ -18,14 +20,14 @@ async function body(request: globalThis.Request, maxBytes = 16384): Promise<Reco
 }
 
 const routes: Route[] = [
+    ...replayRoutes,
+    ...statisticsRoutes,
     { method: 'GET', path: '/ui/', auth: 'admin', handler: () => new Response(page, { headers: { 'content-type': 'text/html; charset=utf-8' } }) },
     {
         method: 'GET', path: '/api/config', auth: 'admin', handler: async ({ ctx, request }) => {
-            const scope = new URL(request.url).searchParams.get('scope') || '*';
+            requireRule(!new URL(request.url).searchParams.size, '配置不支持分组查询');
 
-            if (scope !== '*') { identifier(scope); }
-
-            return Response.json({ ...await configView(ctx, scope) });
+            return Response.json(await configView(ctx));
         }
     },
     {
@@ -114,10 +116,10 @@ const routes: Route[] = [
 ];
 export const adminRoutes: Route[] = routes.map(route => ({
     ...route, handler: async input => {
-        if (route.path === '/ui/') { return route.handler(input); }
+        if (route.path === '/ui/' || route.path === '/replay/') { return route.handler(input); }
 
         try {
-            if (!['/api/room', '/api/room-operation', '/api/occupancy', '/api/points'].includes(route.path)) { await ensureDatabase(input.ctx); }
+            if (!['/api/replay-key', '/api/replays', '/api/replay', '/api/replay-shared', '/api/room', '/api/room-operation', '/api/occupancy', '/api/points', '/api/player-statistics'].includes(route.path)) { await ensureDatabase(input.ctx); }
 
             return await route.handler(input);
         } catch (error) { return Response.json({ error: error instanceof Error ? error.message : '操作未完成' }, { status: 409 }); }
