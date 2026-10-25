@@ -2,13 +2,13 @@ import { requireRule } from './game/types.js';
 
 export interface Config {
     freeEnabled: boolean; stakesEnabled: boolean; showAIStyle: boolean;
-    turnSeconds: number; recallSeconds: number; aiReadSeconds: number; aiDelaySeconds: number; aiBudgetMs: number;
+    turnSeconds: number; recallSeconds: number; aiReadSeconds: number; aiDelaySeconds: number; aiBudgetMs: number; aiIntervalMin: number; aiIntervalMax: number;
     dailyReward: number; minStake: number; maxStake: number; rewardLimit: number; multipliers: number[];
 }
 export interface ConfigSnapshot { values: Config; globalVersion: number; ruleVersion: 1 }
 export const DEFAULTS: Config = {
     freeEnabled: true, stakesEnabled: false, showAIStyle: false, turnSeconds: 60, recallSeconds: 10, aiReadSeconds: 5, aiDelaySeconds: 2,
-    aiBudgetMs: 4, dailyReward: 0, minStake: 1, maxStake: 10000, rewardLimit: 100000,
+    aiBudgetMs: 4, aiIntervalMin: 0.8, aiIntervalMax: 2, dailyReward: 0, minStake: 1, maxStake: 10000, rewardLimit: 100000,
     multipliers: [1100, 1300, 1600, 2000, 3000]
 };
 
@@ -24,6 +24,11 @@ export function validateConfig(input: unknown): Config {
         requireRule(Number.isSafeInteger(full[key]) && full[key] >= min && full[key] <= max, `${key} 超出范围`);
     }
 
+    for (const key of ['aiIntervalMin', 'aiIntervalMax'] as const) {
+        requireRule(typeof full[key] === 'number' && Number.isSafeInteger(full[key] * 10) && full[key] >= 0 && full[key] <= 3, 'AI 行动间隔须为 0～3 秒，最多 1 位小数');
+    }
+
+    requireRule(full.aiIntervalMin <= full.aiIntervalMax, 'AI 最长间隔不能小于最短间隔');
     requireRule(full.minStake <= full.maxStake && full.maxStake * 4 <= 1e12, '下注范围无效');
     requireRule(Array.isArray(full.multipliers) && full.multipliers.length === 5 && full.multipliers.every(n => Number.isSafeInteger(n) && n >= 1000 && n <= 10000), '倍率须为五个 1000～10000 的整数，1000 表示一倍');
 

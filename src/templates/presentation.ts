@@ -1,3 +1,4 @@
+import { isPrivateScope } from '../conversation.js';
 import { menuEntries } from './menu.js';
 import { qqAt } from '@qqbot/sdk';
 import { formatPoints } from '../amounts.js';
@@ -6,7 +7,7 @@ import type { ReplyConfiguration, ReplyButton } from './reply-config.js';
 import type { view } from '../room/state.js';
 import type { Action } from '../game/types.js';
 
-export interface Part { key: string; values: Record<string, string> }
+export interface Part { key: string; values: Record<string, string>; users?: Record<string, string> }
 export interface MessageInput { path?: number[]; scene?: 'group' | 'c2c'; mentionCurrent?: boolean; now?: number; values?: Record<string, string>; room?: ReturnType<typeof view>; parts?: Part[]; moves?: Action[]; offset?: number; actor?: string; dynamic?: Record<string, string>; choices?: string[]; reason?: string; name?: string; notice?: string }
 
 const variables = new WeakMap<ReplyConfiguration['replies'], Map<string, { source: string; names: string[] }>>();
@@ -17,12 +18,13 @@ export function preparePresentation(input: MessageInput) {
     const menu = menuEntries(moves, s?.game?.players ?? [], input.actor ?? '', input.path);
     const offset = requested < menu.entries.length ? requested : 0;
     const players = new Map(s?.game?.players.map(p => [p.id, p]));
+    const missingNames = new Set(s?.members.filter(m => (m.nameLookupAt ?? 0) > 0).map(m => m.id));
     const canQuit = !input.reason && s?.status === 'PLAYING' && !s.paused && !s.recovery && !!s.game?.players.some(p => p.id === input.actor && !p.ai && p.life > 0);
     const capacity = 25 - Number(canQuit) - Number(menu.path.length > 0), count = menu.entries.length <= capacity ? capacity : capacity - 2;
     const now = input.now ?? Date.now();
 
     return {
-        menu, players, current: s?.game ? players.get(s.game.current) : undefined, offset, count, canQuit, selected: menu.entries.slice(offset, offset + count),
+        menu, players, missingNames, current: s?.game ? players.get(s.game.current) : undefined, offset, count, canQuit, selected: menu.entries.slice(offset, offset + count),
         stake: s?.stake ? formatPoints(s.stake) : '', seconds: s ? String(Math.ceil(Math.max(0, s.deadline === undefined ? s.remainingMs : s.deadline - now) / 1000)) : '', reading: Math.max(0, (s?.aiReadUntil ?? 0) - now)
     };
 }
@@ -58,8 +60,13 @@ export function createReplyPresentation(render: typeof renderTemplate, escape: t
         return output;
     }
 
-    function part(config: ReplyConfiguration, p: Part) {
+    function part(config: ReplyConfiguration, p: Part, name: (id: string, value: string) => string) {
         const v = { ...p.values }, raw: string[] = [];
+
+        for (const [key, id] of Object.entries(p.users ?? {})) {
+            v[key] = name(id, v[key] ?? '');
+            raw.push(key);
+        }
 
         if (v.shell !== undefined) {
             v.shell = text(config, v.shell === '1' ? 'live' : 'blank', {}, []);
@@ -72,7 +79,7 @@ export function createReplyPresentation(render: typeof renderTemplate, escape: t
         }
 
         if (p.key === 'item') {
-            v.target = v.target ? text(config, 'target', { name: v.target }, []) : '';
+            v.target = v.target ? text(config, 'target', { name: v.target }, raw.includes('target') ? ['name'] : []) : '';
             raw.push('target');
         }
 
@@ -113,14 +120,16 @@ export function createReplyPresentation(render: typeof renderTemplate, escape: t
         let choices = input.choices ?? [];
         const t = (k: string, v: Record<string, string> = {}, r: string[] = []) => text(config, k, v, r);
 
-        const displayName = (p: { id?: string; name: string; ai?: boolean; life?: number }) => t(p.ai ? 'dealerName' : p.life === 0 ? 'eliminatedName' : input.room?.mode !== 'solo' && input.room?.status === 'PLAYING' && p.id === input.room.game?.current ? 'activeName' : 'humanName', { name: p.name });
+        const group = input.scene === 'group' || input.scene === undefined && !!input.room && !isPrivateScope(input.room.groupId);
+        const name = (id: string, value: string) => group && prepared.missingNames.has(id) ? qqAt(id) : escape(value);
+        const displayName = (p: { id?: string; name: string; ai?: boolean; life?: number }, mention = true) => t(p.ai ? 'dealerName' : p.life === 0 ? 'eliminatedName' : input.room?.mode !== 'solo' && input.room?.status === 'PLAYING' && p.id === input.room.game?.current ? 'activeName' : 'humanName', { name: !p.ai && mention ? name(p.id ?? '', p.name) : escape(p.name) }, ['name']);
 
         if (key === 'panel') {
             const s = input.room!;
             const rows = s.game ? s.game.players.map((p, i) => t('player', { number: String(i + 1), name: displayName(p), life: String(p.life), control: p.control === 'none' ? '' : t('controlled'), inventory: p.inventory.length ? p.inventory.map((item, n) => t('inventoryItem', { number: String(n + 1), item: t('item' + item) }, ['item'])).join(t('inventorySeparator')) : t('inventoryEmpty') }, ['name', 'inventory', 'control'])) : s.members.map(p => t('member', { name: displayName(p), ready: t(p.ready ? 'ready' : 'notReady') }, ['name', 'ready']));
             const { seconds, reading, current } = prepared;
             const timer = reading && s.status === 'PLAYING' && !s.paused && !s.recovery ? t('timerReading', { seconds: String(Math.ceil(reading / 1000)) }) : s.status !== 'PLAYING' ? t(s.game ? 'timerEnded' : 'timerWaiting') : t(s.paused || s.recovery ? 'timerPaused' : 'timer', { seconds });
-            const currentName = current ? input.mentionCurrent && !current.ai && s.status === 'PLAYING' && !s.paused && !s.recovery ? qqAt(current.id) : escape(current.name) : '';
+            const currentName = current ? group && input.mentionCurrent && !current.ai && s.status === 'PLAYING' && !s.paused && !s.recovery ? qqAt(current.id) : current.ai ? escape(current.name) : name(current.id, current.name) : '';
             Object.assign(values, { gameId: s.gameId, version: String(s.version), status: t('status' + s.status), paused: s.paused ? t('paused') : '', recovery: s.recovery ? t('recovery') : '', stake: s.stake ? t('stake', { amount: prepared.stake }) : t('free'), items: rows.filter(Boolean).join(config.historySeparator ?? t('playerSeparator')), timer, turn: s.game ? t('turn', { name: currentName, direction: t(s.game.direction === 1 ? 'forward' : 'reverse') }, ['name', 'direction']) : t('waiting') });
 
             if (s.challengeDate) { values.stake += '\n' + t('dailyLabel', { date: s.challengeDate }); }
@@ -131,7 +140,7 @@ export function createReplyPresentation(render: typeof renderTemplate, escape: t
 
             if (withButtons) { for (const action of s.status === 'WAITING' ? ['join', 'ready', 'start'] : s.status === 'PLAYING' ? ['choose', 'quit'] : []) { dynamic[action] = JSON.stringify({ gameId: s.gameId, expectedVersion: s.version, ...(action === 'choose' ? { menu: 0 } : { action: { type: action === 'quit' ? 'confirmQuit' : action } }) }); } }
         } else if (key === 'menu') {
-            if (input.reason === 'menuSpectator' || input.reason === 'menuOtherTurn') { return { text: t(input.reason, { name: input.name ?? '' }), buttons: [] }; }
+            if (input.reason === 'menuSpectator' || input.reason === 'menuOtherTurn') { return { text: t(input.reason, { name: name(input.actor ?? '', input.name ?? '') }, ['name']), buttons: [] }; }
 
             const s = input.room!, moves = input.moves ?? [];
             const { offset, count, canQuit, selected, players, menu } = prepared;
@@ -139,9 +148,9 @@ export function createReplyPresentation(render: typeof renderTemplate, escape: t
             const lines = selected.map((entry, i) => {
                 const move = entry.display, number = String(i + 1);
 
-                if (entry.player) { return t('menuTarget', { number, target: displayName(player(entry.player)) }, ['target']); }
+                if (entry.player) { return t('menuTarget', { number, target: displayName(player(entry.player), false) }, ['target']); }
 
-                if (move.type === 'shoot') { return t('menuShot', { number, target: displayName(player(move.target)) }, ['target']); }
+                if (move.type === 'shoot') { return t('menuShot', { number, target: displayName(player(move.target), false) }, ['target']); }
 
                 return move.type === 'item' ? t('menuItem', { number, slot: String(move.slot + 1), item: t('item' + (entry.item ?? player(input.actor!).inventory[move.slot])), target: '', stolen: '', stolenTarget: '' }, ['item']) : '';
             });
@@ -200,7 +209,7 @@ export function createReplyPresentation(render: typeof renderTemplate, escape: t
 
             if (link?.startsWith('https://')) { dynamic.link = link; }
 
-            return { text: input.parts.map(p => part(config, p)).filter(Boolean).join(t('eventSeparator')), buttons: withButtons ? buttons(config, key, dynamic, choices) : [] };
+            return { text: input.parts.map(p => part(config, p, name)).filter(Boolean).join(t('eventSeparator')), buttons: withButtons ? buttons(config, key, dynamic, choices) : [] };
         }
 
         if (key === 'history') { raw.push('items'); }

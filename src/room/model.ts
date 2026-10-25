@@ -28,7 +28,7 @@ export interface RoomState {
     version: number; status: Status; mode: Mode; stake: number; difficulty: number;
     config: ConfigSnapshot; createdAt: number; members: Member[]; game?: Game;
     paused: boolean; recovery: boolean; reason?: string; remainingMs: number; deadline?: number; reminderSent: boolean;
-    aiDue?: number; aiReadUntil?: number; outbox: Task[]; seq: number; money: MoneyTask[]; reserved: boolean;
+    aiDue?: number; aiReadUntil?: number; aiPaceUntil?: number; outbox: Task[]; seq: number; money: MoneyTask[]; reserved: boolean;
     reserveAt?: number; reserveUntil?: number; renewal: number; released: string[];
     confirmations: Record<string, { version: number; expires: number }>; indexVersion: number; indexDue?: number | null; indexStatus?: Status; departures?: string[]; abortRequested?: boolean; pendingReleases?: { id: string; claimId: string }[];
 }

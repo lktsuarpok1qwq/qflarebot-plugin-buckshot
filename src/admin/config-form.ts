@@ -2,9 +2,9 @@ import { parseMultiplier } from './multipliers.js';
 import { parsePoints, formatPoints } from '../amounts.js';
 
 export const configForm = 'const parseMultiplier = ' + parseMultiplier.toString() + ';\nconst parsePoints = ' + parsePoints.toString() + ';\nconst formatPoints = ' + formatPoints.toString() + ';\n' + String.raw`
-const fields = [['dailyReward', '每日挑战奖励', 'money'], ['showAIStyle', '显示庄家性格', 'boolean'], ['freeEnabled', '免费模式', 'boolean'], ['stakesEnabled', '积分下注', 'boolean'], ['turnSeconds', '操作时间', 'number'], ['recallSeconds', '撤回等待', 'number'], ['aiReadSeconds', '装填阅读时间', 'number'], ['aiDelaySeconds', 'AI 恢复延迟', 'number'], ['aiBudgetMs', 'AI 搜索预算', 'number'], ['minStake', '最小下注', 'money'], ['maxStake', '最大下注', 'money'], ['rewardLimit', '单局奖励上限', 'money'], ['multipliers', '五档倍率', 'multipliers']];
+const fields = [['dailyReward', '每日挑战奖励', 'money'], ['showAIStyle', '显示庄家性格', 'boolean'], ['freeEnabled', '免费模式', 'boolean'], ['stakesEnabled', '积分下注', 'boolean'], ['turnSeconds', '操作时间', 'number'], ['recallSeconds', '撤回等待', 'number'], ['aiReadSeconds', '装填阅读时间', 'number'], ['aiIntervalMin', 'AI 最短间隔', 'seconds'], ['aiIntervalMax', 'AI 最长间隔', 'seconds'], ['aiDelaySeconds', 'AI 恢复延迟', 'number'], ['aiBudgetMs', 'AI 搜索预算', 'number'], ['minStake', '最小下注', 'money'], ['maxStake', '最大下注', 'money'], ['rewardLimit', '单局奖励上限', 'money'], ['multipliers', '五档倍率', 'multipliers']];
 const integerLimits = { turnSeconds: [20, 300], recallSeconds: [1, 20], aiReadSeconds: [0, 10], aiDelaySeconds: [1, 3], aiBudgetMs: [1, 8] };
-const hints = { dailyReward: '积分，最多 2 位小数；0 不发奖', turnSeconds: '20～300 秒，整数', recallSeconds: '1～20 秒，整数', aiReadSeconds: '0～10 秒，整数；仅 AI 先手时等待', aiDelaySeconds: '1～3 秒，整数；中断后接手行动', aiBudgetMs: '1～8 毫秒，整数；每日挑战使用固定搜索量', minStake: '积分，最多 2 位小数', maxStake: '积分，最多 2 位小数', rewardLimit: '下注局的奖励上限，最多 2 位小数', multipliers: '1～10 倍，含本金，最多 3 位小数' };
+const hints = { aiIntervalMin: '0～3 秒，最多 1 位小数', aiIntervalMax: '0～3 秒，最多 1 位小数；两项均为 0 时即时行动', dailyReward: '积分，最多 2 位小数；0 不发奖', turnSeconds: '20～300 秒，整数', recallSeconds: '1～20 秒，整数', aiReadSeconds: '0～10 秒，整数；仅 AI 先手时等待', aiDelaySeconds: '1～3 秒，整数；中断后接手行动', aiBudgetMs: '1～8 毫秒，整数；每日挑战使用固定搜索量', minStake: '积分，最多 2 位小数', maxStake: '积分，最多 2 位小数', rewardLimit: '下注局的奖励上限，最多 2 位小数', multipliers: '1～10 倍，含本金，最多 3 位小数' };
 let configEpoch = 0, configBusy = false, loaded = null, baseline = '', pending = null;
 let savedDraft = null;
 
@@ -22,6 +22,12 @@ function validateValues(value) {
             throw error;
         }
     }
+
+    for (const key of ['aiIntervalMin', 'aiIntervalMax']) {
+        if (typeof value[key] !== 'number' || !Number.isSafeInteger(value[key] * 10) || value[key] < 0 || value[key] > 3) { throw new Error('AI 行动间隔须为 0～3 秒，最多 1 位小数'); }
+    }
+
+    if (value.aiIntervalMin > value.aiIntervalMax) { throw new Error('AI 最长间隔不能小于最短间隔'); }
 
     if (value.minStake > value.maxStake) { throw new Error('下注范围无效'); }
 
@@ -56,6 +62,8 @@ function validateForm(focus = false) {
 
                 if (type === 'number' && !/^\d+$/.test(raw)) { throw Error('请填写整数，不使用指数或符号'); }
 
+                if (type === 'seconds' && !/^\d+(?:\.\d)?$/.test(raw)) { throw Error('最多 1 位小数，不使用指数或符号'); }
+
                 if (type === 'money') { parsePoints(raw, ['dailyReward', 'rewardLimit'].includes(key)); }
 
                 if (type === 'multipliers') { parseMultiplier(raw); }
@@ -70,6 +78,10 @@ function validateForm(focus = false) {
     const min = $('cfg-minStake'), max = $('cfg-maxStake');
 
     if (!min.validationMessage && !max.validationMessage && Number(min.value) > Number(max.value)) { setError(max, '最大下注不能小于最小下注'); }
+
+    const shortest = $('cfg-aiIntervalMin'), longest = $('cfg-aiIntervalMax');
+
+    if (!shortest.validationMessage && !longest.validationMessage && Number(shortest.value) > Number(longest.value)) { setError(longest, '最长间隔不能小于最短间隔'); }
 
     $('configErrors').textContent = first ? '请修正标红的输入项' : '';
 
@@ -92,7 +104,7 @@ function draft() {
     for (const [key, , type] of fields) {
         const e = $('cfg-' + key);
 
-        value[key] = type === 'boolean' ? e.checked : type === 'number' ? (e.value.trim() ? Number(e.value) : NaN) : type === 'money' ? e.value.trim() : [...e.querySelectorAll('input')].map(input => input.value);
+        value[key] = type === 'boolean' ? e.checked : ['number', 'seconds'].includes(type) ? (e.value.trim() ? Number(e.value) : NaN) : type === 'money' ? e.value.trim() : [...e.querySelectorAll('input')].map(input => input.value);
     }
 
     return value;
@@ -169,9 +181,9 @@ function loadForm(result) {
     $('configForm').replaceChildren();
 
     const groups = [
-        ['常用设置', ['freeEnabled', 'showAIStyle', 'turnSeconds', 'aiReadSeconds', 'recallSeconds'], '阅读不占玩家倒计时；最新操作面板保留。'],
-        ['积分与返还', ['dailyReward', 'stakesEnabled', 'minStake', 'maxStake', 'rewardLimit', 'multipliers'], '每日挑战每天一次，开局后计次；发奖需 Points 授权及玩家开户。'],
-        ['高级设置', ['aiDelaySeconds', 'aiBudgetMs'], '正常行动即时推进；复杂局面同时受搜索量上限约束。']
+        ['常用设置', ['freeEnabled', 'showAIStyle', 'turnSeconds', 'aiReadSeconds', 'aiIntervalMin', 'aiIntervalMax', 'recallSeconds'], '阅读不占玩家倒计时；最新操作面板保留。'],
+        ['积分与返还', ['dailyReward', 'stakesEnabled', 'minStake', 'maxStake', 'rewardLimit', 'multipliers'], '每日挑战每天一次，开局后计次；发奖需启用 Points 来源并由玩家开户。'],
+        ['高级设置', ['aiDelaySeconds', 'aiBudgetMs'], '恢复延迟仅用于中断接手；搜索量另有上限。']
     ];
     const sections = new Map();
 
@@ -230,13 +242,20 @@ function loadForm(result) {
             e.inputMode = 'decimal';
         }
 
+        if (type === 'seconds') {
+            e.min = '0';
+            e.max = '3';
+            e.step = '0.1';
+            e.inputMode = 'decimal';
+        }
+
         if (type === 'number') {
             [e.min, e.max] = integerLimits[key].map(String);
             e.step = '1';
             e.inputMode = 'numeric';
         }
 
-        if (type === 'number' || type === 'money') { e.required = true; }
+        if (type === 'number' || type === 'money' || type === 'seconds') { e.required = true; }
 
         e.oninput = () => buttons();
         e.addEventListener('focusout', () => buttons());
@@ -253,7 +272,7 @@ function loadForm(result) {
             name.append(hint);
         }
 
-        if (type === 'money' || type === 'number') {
+        if (type === 'money' || type === 'number' || type === 'seconds') {
             const error = document.createElement('small');
             error.id = e.id + '-error';
             error.className = 'danger field-error';

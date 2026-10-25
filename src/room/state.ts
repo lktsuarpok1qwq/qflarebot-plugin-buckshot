@@ -53,12 +53,28 @@ export function clock(s: RoomState, now: number): void {
 
     const ai = s.game!.players.find(p => p.id === s.game!.current)!.ai;
 
+    if (ai) {
+        if (s.aiPaceUntil === undefined) {
+            const min = Math.round(s.config.values.aiIntervalMin * 10), max = Math.round(s.config.values.aiIntervalMax * 10);
+            // 展示节奏不消耗游戏或 AI 决策随机流；截止时间随原房间事务保存。
+            s.aiPaceUntil = now + (min + (max > min ? secureRandom(max - min + 1) : 0)) * 100;
+        }
+
+        if (s.aiPaceUntil > now) {
+            blockClock(s, now);
+            s.aiDue = s.aiPaceUntil + s.config.values.aiDelaySeconds * 1000;
+
+            return;
+        }
+    } else { s.aiPaceUntil = undefined; }
+
     if (s.deadline === undefined) { s.deadline = now + s.remainingMs; }
 
     if (ai && s.aiDue === undefined) { s.aiDue = now + s.config.values.aiDelaySeconds * 1000; }
 }
 
 export function events(s: RoomState, values: GameEvent[], oldTurn: number, now: number, oldCurrent?: string): void {
+    s.aiPaceUntil = undefined;
     let summary: import('../templates/presentation.js').Part[] = [];
     const flush = () => {
         if (summary.length) {

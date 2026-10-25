@@ -133,7 +133,7 @@ export async function coordinateJoin(ctx: PluginContext, group: string, request:
 export interface DrainResult { room: ReturnType<typeof view> | null; moves: Action[]; panelHandled: boolean; continuing?: boolean }
 interface DeliveryOptions { foreground?: boolean; budget?: { deadline: number; passiveReplies: number; remaining: number }; onComplete?: (result: DrainResult) => Promise<void> }
 
-export async function drain(ctx: PluginContext, group: string, session?: Session, initial?: Awaited<ReturnType<BuckshotRoom['work']>>, deferReading = true, options: DeliveryOptions = {}): Promise<DrainResult> {
+export async function drain(ctx: PluginContext, group: string, session?: Session, initial?: Awaited<ReturnType<BuckshotRoom['work']>>, deferWait = true, options: DeliveryOptions = {}): Promise<DrainResult> {
     const room = roomFor(ctx, group);
     // SDK 一次发送最多占用约 20 秒；8 秒后不再领取新任务，给宿主生命周期留出余量。
     const budget = options.budget ?? { deadline: Date.now() + 8000, passiveReplies: 0, remaining: 24 };
@@ -164,13 +164,13 @@ export async function drain(ctx: PluginContext, group: string, session?: Session
         }
 
         if (!work?.task) {
-            if (deferReading && work?.resumeAt !== undefined && work.resumeAt >= deadline) {
+            if (deferWait && work?.resumeAt !== undefined && work.resumeAt >= deadline) {
                 const resumeAt = work.resumeAt, gameId = work.gameId;
-                // 阅读超出当前处理窗口时只接续一次，复用 SDK 后台生命周期，不轮询或递归延长。
+                // 等待超出当前处理窗口时只接续一次，复用 SDK 后台生命周期，不轮询或递归延长。
                 ctx.waitUntil((async () => {
                     await waitForTime(resumeAt);
 
-                    try { await drain(ctx, group, undefined, await room.work(gameId, undefined, true, true), false); } catch { ctx.logger.warn('阅读后接续未完成，等待持久化恢复', { gameId }); }
+                    try { await drain(ctx, group, undefined, await room.work(gameId, undefined, true, true), false); } catch { ctx.logger.warn('等待后接续未完成，等待持久化恢复', { gameId }); }
                 })());
             }
 
@@ -226,7 +226,7 @@ export async function drain(ctx: PluginContext, group: string, session?: Session
 
         if (options.foreground && outcome === 'SENT' && work && (work.task || work.resumeAt !== undefined || work.moneyDue || work.release.length || work.closeEmpty || work.pendingReleases.length)) {
             // 复用已经领取的下一任务、事件凭据和同一个时间预算，后台不重放动作、不增加轮询。
-            const continuation = drain(ctx, group, session, work, deferReading, { budget }).then(result => options.onComplete?.(result)).catch(() => { ctx.logger.warn('消息后台续跑未完成，等待原任务恢复', { gameId: work!.gameId }); });
+            const continuation = drain(ctx, group, session, work, deferWait, { budget }).then(result => options.onComplete?.(result)).catch(() => { ctx.logger.warn('消息后台续跑未完成，等待原任务恢复', { gameId: work!.gameId }); });
             ctx.waitUntil(continuation);
 
             return { room: work.room, moves: work.moves, panelHandled: true, continuing: true };

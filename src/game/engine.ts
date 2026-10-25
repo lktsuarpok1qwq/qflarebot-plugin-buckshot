@@ -74,7 +74,7 @@ function finish(game: Game, events: GameEvent[]): boolean {
 
     for (const p of game.players) { p.control = 'none'; }
 
-    events.push({ type: 'finish', message: { key: alive.length ? 'finish' : 'noWinner', values: { name: alive[0]?.name ?? '' } }, text: alive.length ? `胜者：${alive[0].name}` : '本局无胜者' });
+    events.push({ type: 'finish', message: { key: alive.length ? 'finish' : 'noWinner', users: { name: alive[0]?.id ?? '' }, values: { name: alive[0]?.name ?? '' } }, text: alive.length ? `胜者：${alive[0].name}` : '本局无胜者' });
 
     return true;
 }
@@ -91,7 +91,7 @@ function advance(game: Game, events: GameEvent[]): void {
 
         if (next.control === 'skip') {
             next.control = 'release';
-            events.push({ type: 'skip', message: { key: 'skip', values: { name: next.name } }, text: `${next.name} 跳过行动` });
+            events.push({ type: 'skip', message: { key: 'skip', users: { name: next.id }, values: { name: next.name } }, text: `${next.name} 跳过行动` });
             continue;
         }
 
@@ -165,7 +165,7 @@ export function legalActions(game: Game, actorId = game.current): Extract<Action
 }
 
 function useItem(game: Game, actor: Player, item: Item, target: string | undefined, rng: RNG, events: GameEvent[]): void {
-    events.push({ type: 'item', message: { key: 'item', values: { actor: actor.name, item, target: target ? player(game, target).name : '' } }, text: `${actor.name} 使用${ITEM_NAMES[item]}${target ? ` → ${player(game, target).name}` : ''}` });
+    events.push({ type: 'item', message: { key: 'item', users: { actor: actor.id, target: target ?? '' }, values: { actor: actor.name, item, target: target ? player(game, target).name : '' } }, text: `${actor.name} 使用${ITEM_NAMES[item]}${target ? ` → ${player(game, target).name}` : ''}` });
 
     if (item === 'glass' || item === 'phone') {
         const n = game.shells.length - game.cursor, first = game.mode === 'solo' ? 2 : 3;
@@ -225,7 +225,7 @@ function transition(input: Game, actorId: string, action: Action, rng: RNG, sear
         requireRule(target.life > 0, '玩家已淘汰');
         target.life = 0;
         pass = target.id === game.current;
-        events.push({ type: 'eliminate', message: { key: 'eliminate', values: { name: target.name } }, text: `${target.name} 淘汰` });
+        events.push({ type: 'eliminate', message: { key: 'eliminate', users: { name: target.id }, values: { name: target.name } }, text: `${target.name} 淘汰` });
     } else {
         requireRule(actorId === game.current && actor.life > 0, '未轮到你行动');
 
@@ -235,7 +235,7 @@ function transition(input: Game, actorId: string, action: Action, rng: RNG, sear
 
             if (actor.timeouts >= 3) { actor.life = 0; }
 
-            events.push({ type: 'eliminate', message: { key: actor.life ? 'timeout' : 'timeoutEliminate', values: { name: actor.name } }, text: `${actor.name} 操作超时${actor.life ? '' : '，已淘汰'}` });
+            events.push({ type: 'eliminate', message: { key: actor.life ? 'timeout' : 'timeoutEliminate', users: { name: actor.id }, values: { name: actor.name } }, text: `${actor.name} 操作超时${actor.life ? '' : '，已淘汰'}` });
         } else {
             requireRule(legalActions(game).some(a => a.type === action.type && (a.type === 'shoot' && action.type === 'shoot' ? a.target === action.target : a.type === 'item' && action.type === 'item' && a.slot === action.slot && a.target === action.target && a.stolenSlot === action.stolenSlot && a.stolenTarget === action.stolenTarget)), '操作或道具目标无效');
 
@@ -249,7 +249,7 @@ function transition(input: Game, actorId: string, action: Action, rng: RNG, sear
 
                 if (!pass) { game.turn++; }
 
-                events.push({ type: 'shot', loadId: game.loadId, message: { key: 'shot', values: { actor: actor.name, target: target.name, shell: String(shell) } }, text: `${actor.name} → ${target.name}：${shell ? '实弹' : '空弹'}` });
+                events.push({ type: 'shot', loadId: game.loadId, message: { key: 'shot', users: { actor: actor.id, target: target.id }, values: { actor: actor.name, target: target.name, shell: String(shell) } }, text: `${actor.name} → ${target.name}：${shell ? '实弹' : '空弹'}` });
             } else {
                 let item = actor.inventory[action.slot], target = action.target;
                 actor.inventory.splice(action.slot, 1);
@@ -258,7 +258,7 @@ function transition(input: Game, actorId: string, action: Action, rng: RNG, sear
                     const donor = player(game, target!);
                     item = donor.inventory.splice(action.stolenSlot!, 1)[0];
                     target = action.stolenTarget;
-                    events.push({ type: 'item', message: { key: 'steal', values: { actor: actor.name, target: donor.name, item } }, text: `${actor.name} 使用肾上腺素，从 ${donor.name} 偷取${ITEM_NAMES[item]}` });
+                    events.push({ type: 'item', message: { key: 'steal', users: { actor: actor.id, target: donor.id }, values: { actor: actor.name, target: donor.name, item } }, text: `${actor.name} 使用肾上腺素，从 ${donor.name} 偷取${ITEM_NAMES[item]}` });
                 }
 
                 useItem(game, actor, item, target, rng, events);

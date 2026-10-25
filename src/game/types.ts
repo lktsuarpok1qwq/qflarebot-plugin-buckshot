@@ -18,7 +18,7 @@ export type Action = { type: 'shoot'; target: string } | {
     type: 'item'; slot: number; target?: string; stolenSlot?: number; stolenTarget?: string;
 } | { type: 'timeout' } | { type: 'eliminate'; target: string };
 export interface GameEvent {
-    message?: { key: string; values: Record<string, string> };
+    message?: { key: string; values: Record<string, string>; users?: Record<string, string> };
     type: 'load' | 'shot' | 'eject' | 'item' | 'intel' | 'skip' | 'eliminate' | 'finish';
     text: string; recipient?: string; loadId?: number; live?: number; blank?: number; intel?: Intel;
 }

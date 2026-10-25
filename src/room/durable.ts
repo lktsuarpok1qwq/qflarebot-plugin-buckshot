@@ -475,7 +475,11 @@ export class BuckshotRoom extends StoredObject {
         if (outcome === 'SENT') {
             task.sentAt = sentAt ?? Date.now();
 
-            if (task.kind === 'message' && !task.private && task.loadId === s.game?.loadId && s.game?.players.find(p => p.id === s.game?.current)?.ai) { s.aiReadUntil = task.sentAt + s.config.values.aiReadSeconds * 1000; }
+            if (task.kind === 'message' && !task.private && task.loadId === s.game?.loadId && s.game?.players.find(p => p.id === s.game?.current)?.ai) {
+                s.aiReadUntil = task.sentAt + s.config.values.aiReadSeconds * 1000;
+                // 装填阅读已经提供停顿，首个行动不再叠加随机间隔。
+                s.aiPaceUntil = s.aiReadUntil;
+            }
 
             if (messageId) { task.messageId = messageId; }
 

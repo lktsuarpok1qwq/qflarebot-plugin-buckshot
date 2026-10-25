@@ -67,12 +67,19 @@ export class BuckshotPlayerRegistry extends StoredObject {
         return { value, nextLookup: next.nextLookup, ...(token ? { token } : {}) };
     }
 
-    rememberPrivateName(userId: string, eventName: string): void {
-        identifier(userId);
-        const group = `c2c:${userId}`;
+    rememberName(group: string, eventName: string): void {
         identifier(group);
+        const value = cleanName(eventName);
 
-        if (cleanName(eventName)) { this.ctx.storage.transactionSync(() => this.admissionName(group, eventName)); }
+        if (!value) { return; }
+
+        this.ctx.storage.transactionSync(() => {
+            const names = this.read<CachedName[]>('names') ?? [];
+
+            if (names.some(n => n.group === group && n.value)) { return; }
+
+            this.write('names', [...names.filter(n => n.group !== group).slice(-7), { group, value, nextLookup: Date.now() + 86400000 }]);
+        });
     }
 
     nameForOwner(input: { botId: string; userId: string; gameId: string; groupId: string; claimId: string }, eventName: string): AdmissionName | null {

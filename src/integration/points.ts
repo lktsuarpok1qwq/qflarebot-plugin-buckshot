@@ -26,9 +26,12 @@ export async function preflightChallenge(ctx: PluginContext, userId: string, amo
 
     const service = ctx.service<PointsService>('points.wallet');
     const policy = await service.getSourcePolicy({ source: 'buckshot' });
-    requireRule(policy.ok && policy.data.registered && policy.data.enabled && policy.data.operationPermissions.includes('credit'), '每日挑战奖励未获 Points 发放授权');
+    requireRule(policy.ok, '每日挑战奖励服务暂不可用');
+    requireRule(policy.data.registered, '每日挑战奖励来源未注册');
+    requireRule(policy.data.enabled, '每日挑战奖励来源已停用');
     const account = await service.checkAccounts({ source: 'buckshot', userIds: [userId] });
-    requireRule(account.ok && account.data.accounts.length === 1 && account.data.accounts[0].userId === userId && account.data.accounts[0].exists, '请先开通积分账户再参加有奖挑战');
+    requireRule(account.ok, '每日挑战奖励账户查询失败');
+    requireRule(account.data.accounts.length === 1 && account.data.accounts[0].userId === userId && account.data.accounts[0].exists, '请先开通积分账户再参加有奖挑战');
 }
 
 async function execute(service: PointsService, task: MoneyTask, state: Pick<RoomState, 'gameId' | 'stake' | 'mode'>): Promise<Result<OperationReceipt>> {

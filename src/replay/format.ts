@@ -114,7 +114,8 @@ export function operationStep(s: RoomState, action: ReplayAction, actor: string 
             for (const [key, value] of Object.entries(part.values)) {
                 if (key === 'gameId' || key === 'replayUrl') { continue; }
 
-                const matched = ['actor', 'target', 'name'].includes(key) ? players.filter(p => p.name === value) : [];
+                const id = part.users?.[key];
+                const matched = id ? players.filter(p => p.id === id) : ['actor', 'target', 'name'].includes(key) ? players.filter(p => p.name === value) : [];
                 v[key] = matched.length === 1 ? [playerId(s, matched[0].id)!] : ['shell', 'count', 'live', 'blank', 'position', 'loadId'].includes(key) ? Number(value) : value;
             }
 

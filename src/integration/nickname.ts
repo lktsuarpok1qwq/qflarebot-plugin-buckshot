@@ -50,41 +50,48 @@ export function refreshName(ctx: PluginContext, room: DurableObjectStub<Buckshot
     if (name.token) { ctx.waitUntil(lookupName(ctx, room, registry, input, name)); }
 }
 
-// 已有有效昵称不增加 RPC；缺名时复用当前请求已有的房间快照，按持久化期限补查。
+// 仅使用 SDK 已解析的身份字段，不从消息正文或按钮参数猜测昵称。
+export function eventName(session: Session, userId = session.userId): string {
+    const own = userId === session.userId ? cleanName(session.userName) : '';
+
+    return own || cleanName(session.mentions?.find(m => !m.bot && m.id === userId)?.username);
+}
+
+// 复用已有快照；只为缺名的本局玩家补缓存，不监听全群消息或逐人查询。
 export async function supplementName(ctx: PluginContext, room: DurableObjectStub<BuckshotRoom>, state: ReturnType<typeof view>, session: Session): Promise<void> {
-    const member = state.members.find(m => m.id === session.userId);
+    if (!['WAITING', 'PREPARING', 'PLAYING'].includes(state.status)) { return; }
 
-    if (!member || member.nameLookupAt === 0 || !['WAITING', 'PREPARING', 'PLAYING'].includes(state.status)) { return; }
+    for (const member of state.members) {
+        if (member.nameLookupAt === 0) { continue; }
 
-    const eventName = cleanName(session.userName);
+        const fresh = eventName(session, member.id);
 
-    if (isPrivateScope(state.groupId) && !eventName) { return; }
+        if (!fresh && (member.id !== session.userId || isPrivateScope(state.groupId) || (member.nameLookupAt ?? 0) > Date.now())) { continue; }
 
-    if (!eventName && (member.nameLookupAt ?? 0) > Date.now()) { return; }
+        const input = { gameId: state.gameId, groupId: state.groupId, userId: member.id, claimId: member.claimId ?? state.gameId };
+        const run = async () => {
+            try {
+                const registry = ctx.durable.get<BuckshotPlayerRegistry>('BuckshotPlayerRegistry', `${ctx.botId}:${member.id}`);
+                // 原占用与入场编号必须仍有效，旧面板不能复活占用。
+                const name = await registry.nameForOwner({ botId: ctx.botId, ...input }, fresh);
 
-    const input = { gameId: state.gameId, groupId: state.groupId, userId: session.userId, claimId: member.claimId ?? state.gameId };
-    const run = async () => {
-        try {
-            const registry = ctx.durable.get<BuckshotPlayerRegistry>('BuckshotPlayerRegistry', `${ctx.botId}:${session.userId}`);
-            // 不能在旧面板或离场后重新占用房间。
-            const name = await registry.nameForOwner({ botId: ctx.botId, ...input }, eventName);
+                if (!name) { return; }
 
-            if (!name) { return; }
+                const updated = await room.updateName(input.gameId, input.userId, input.claimId, name.value, name.nextLookup ?? Date.now() + 30000);
 
-            const updated = await room.updateName(input.gameId, input.userId, input.claimId, name.value, name.nextLookup ?? Date.now() + 30000);
+                if (updated && name.value) {
+                    member.name = name.value;
+                    member.nameLookupAt = 0;
+                    const player = state.game?.players.find(p => p.id === member.id);
 
-            if (updated && name.value) {
-                member.name = name.value;
-                member.nameLookupAt = 0;
-                const player = state.game?.players.find(p => p.id === session.userId);
+                    if (player) { player.name = name.value; }
+                }
 
-                if (player) { player.name = name.value; }
-            }
+                if (fresh) { refreshName(ctx, room, registry, input, name); } else { await lookupName(ctx, room, registry, input, name); }
+            } catch (error) { ctx.logger.warn('昵称补充未完成', { outcome: 'coordination_failed', ...diagnostic(error), gameId: state.gameId }); }
+        };
 
-            if (eventName) { refreshName(ctx, room, registry, input, name); } else { await lookupName(ctx, room, registry, input, name); }
-        } catch (error) { ctx.logger.warn('昵称补充未完成', { outcome: 'coordination_failed', ...diagnostic(error), gameId: state.gameId }); }
-    };
-
-    // 事件补名只等待本地存储；无昵称的 SDK 补查始终不阻塞玩家操作。
-    if (eventName) { await run(); } else { ctx.waitUntil(run()); }
+        // 事件补名只等待本地存储；SDK 查询不阻塞操作。
+        if (fresh) { await run(); } else { ctx.waitUntil(run()); }
+    }
 }

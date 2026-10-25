@@ -2,7 +2,6 @@ import { personalText } from '../statistics/messages.js';
 import { replayLink } from '../replay/access.js';
 import { dateParts } from '../replay/format.js';
 import { renderTemplate } from '../templates/replies.js';
-import { cleanName } from '../room/names.js';
 import { scopeFor, validateConversation } from '../conversation.js';
 import { deliver, renderMessage } from '../templates/send.js';
 import { DEFAULT_CONFIGURATION } from '../templates/reply-config.js';
@@ -10,7 +9,7 @@ import type { ReplyConfiguration } from '../templates/reply-config.js';
 import { type OutgoingMessage, type PluginContext, type Session } from '@qqbot/sdk';
 import { requireRule, type Mode } from '../game/types.js';
 import type { CreateInput, Request } from '../room/model.js';
-import { supplementName } from './nickname.js';
+import { eventName, supplementName } from './nickname.js';
 import { base } from './panel.js';
 import { ensureDatabase, readRequestConfig, type RequestConfig } from './database.js';
 import { coordinateCreate, coordinateJoin, drain, roomFor, registryFor } from './coordinator.js';
@@ -82,8 +81,8 @@ export async function command(ctx: PluginContext, session: Session, text: string
     const current = await roomFor(ctx, scope).publicState();
 
     if (!current || current.status === 'CLOSED') {
-        if (session.scene === 'c2c' && cleanName(session.userName)) {
-            try { await registryFor(ctx, session.userId).rememberPrivateName(session.userId, session.userName); } catch { ctx.logger.warn('私聊入口昵称缓存未确认', { code: 'NAME_CACHE_UNAVAILABLE' }); }
+        if (eventName(session)) {
+            try { await registryFor(ctx, session.userId).rememberName(scope, eventName(session)); } catch { ctx.logger.warn('入口昵称缓存未确认', { code: 'NAME_CACHE_UNAVAILABLE' }); }
         }
 
         return renderMessage(templates, 'lobby', { scene: session.scene as 'group' | 'c2c' });
@@ -127,7 +126,7 @@ async function confirmCreate(ctx: PluginContext, session: Session, gameId: strin
     }
 
     const create = prior ?? authorized;
-    await coordinateCreate(ctx, create, session.userName || create.member.name);
+    await coordinateCreate(ctx, create, eventName(session) || create.member.name);
 
     if (create.mode === 'solo') {
         await drain(ctx, scope, session, undefined, true, { foreground: true });
@@ -186,7 +185,7 @@ export async function interact(ctx: PluginContext, session: Session, data: unkno
 
         if (!await room.operation(input.gameId, actionId)) { await preflight(ctx, [session.userId], current!.stake); }
 
-        try { await coordinateJoin(ctx, scope, request, session.userName); } catch (error) {
+        try { await coordinateJoin(ctx, scope, request, eventName(session)); } catch (error) {
             if (!(error instanceof Error) || error.message !== '面板已更新，请查询状态') { throw error; }
 
             return renderMessage(templates, 'panel', { room: (await room.publicState())!, notice: 'staleAction' });

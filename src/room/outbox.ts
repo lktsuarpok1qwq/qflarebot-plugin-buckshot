@@ -21,7 +21,7 @@ export function prepareDelivery(s: RoomState, claim: boolean) {
             const player = s.game?.players.find(p => p.id === s.game?.current);
             const menu = next.panel && s.status === 'PLAYING' && !s.paused && !s.recovery && player && !player.ai;
             next.payload = renderMessage(DEFAULT_CONFIGURATION, menu ? 'menu' : next.panel ? 'panel' : next.parts![0].key,
-                { room: next.snapshot, parts: next.parts?.some(p => ['finish', 'noWinner'].includes(p.key)) ? [...next.parts, ...endStatistics(s)] : next.parts, mentionCurrent: next.panel && !isPrivateScope(s.groupId), ...(menu ? { actor: player.id, moves: legalActions(s.game!, player.id) } : {}) });
+                { room: next.snapshot ?? room, scene: next.private || isPrivateScope(s.groupId) ? 'c2c' : 'group', parts: next.parts?.some(p => ['finish', 'noWinner'].includes(p.key)) ? [...next.parts, ...endStatistics(s)] : next.parts, mentionCurrent: next.panel && !isPrivateScope(s.groupId), ...(menu ? { actor: player.id, moves: legalActions(s.game!, player.id) } : {}) });
             next.keep = keepMessage(next.payload);
             next.panelOrder = panelReference(next.payload)?.order;
         }
@@ -39,7 +39,7 @@ export function prepareDelivery(s: RoomState, claim: boolean) {
 
     return {
         recallSeconds: s.config.values.recallSeconds, aiReadSeconds: s.config.values.aiReadSeconds, discardPanels: [] as string[], moves: !task && s.game && s.status === 'PLAYING' && !s.paused && !s.recovery && s.deadline !== undefined && s.deadline > Date.now() && !s.game.players.find(p => p.id === s.game?.current)?.ai ? legalActions(s.game) : [],
-        gameId: s.gameId, stake: s.stake, mode: s.mode, resumeAt: !task && s.status === 'PLAYING' && !s.paused && !s.recovery ? s.aiReadUntil : undefined, moneyDue: (s.money.some(t => t.state === 'PENDING' || t.state === 'UNKNOWN' && (t.retryAt ?? 0) <= Date.now()) || s.reserved && s.status === 'PLAYING' && s.reserveUntil! - Date.now() <= 3600000), task,
+        gameId: s.gameId, stake: s.stake, mode: s.mode, resumeAt: !task && s.status === 'PLAYING' && !s.paused && !s.recovery ? s.aiReadUntil ?? s.aiPaceUntil : undefined, moneyDue: (s.money.some(t => t.state === 'PENDING' || t.state === 'UNKNOWN' && (t.retryAt ?? 0) <= Date.now()) || s.reserved && s.status === 'PLAYING' && s.reserveUntil! - Date.now() <= 3600000), task,
         release: closable ? s.members.filter(m => !s.released.includes(m.id)).map(m => m.id) : [], closeEmpty: closable && !s.members.length,
         history: closable && s.game && s.replay?.key ? { game: s.gameId, object_key: s.replay.key, mode: s.mode, created: s.createdAt, results: Object.fromEntries(s.members.map(m => [m.id, playerResult(s, m.id)])) } : undefined,
         pendingReleases: s.pendingReleases ?? [], room: task ? { ...room, tasks: pendingTasks(s) } : room

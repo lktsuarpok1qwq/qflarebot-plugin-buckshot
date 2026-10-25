@@ -20,7 +20,8 @@ export function workDue(s: RoomState, now: number): number | null {
 
     const task = s.outbox.find(t => t.state !== 'SENT' && !(!t.critical && ['FAILED', 'UNKNOWN'].includes(t.state)));
     const money = s.money.find(t => t.state !== 'DONE');
-    const ready = task?.state === 'PENDING' || task?.state === 'SENDING' || money?.state === 'PENDING' || money?.state === 'SENDING' || s.pendingReleases?.length || canClose(s);
+    const pacing = s.status === 'PLAYING' && !s.paused && !s.recovery && s.aiPaceUntil !== undefined && s.game?.players.some(p => p.id === s.game?.current && p.ai);
+    const ready = pacing || task?.state === 'PENDING' || task?.state === 'SENDING' || money?.state === 'PENDING' || money?.state === 'SENDING' || s.pendingReleases?.length || canClose(s);
 
     if (ready) { return s.indexDue != null && s.indexDue <= now ? s.indexDue : now; }
 
