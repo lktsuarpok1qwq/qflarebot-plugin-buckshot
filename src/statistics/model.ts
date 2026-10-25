@@ -197,7 +197,7 @@ export function statisticsFact(s: RoomState): Fact | undefined {
     return {
         bot: s.botId, game: s.gameId, day: dateParts(c.sealedAt).date, mode: s.mode, paid: s.stake ? 1 : 0, difficulty: s.mode === 'solo' ? s.difficulty : -1,
         games: started && !c.cancelled ? 1 : 0, cancelled: !started || c.cancelled ? 1 : 0, draws: started && !c.cancelled && !s.game?.winner ? 1 : 0,
-        players: started ? s.members.length : 0, humanWins: started && !c.cancelled && s.game?.winner && s.game.winner !== 'ai' ? 1 : 0,
+        players: started ? s.members.length : 0, humanWins: started && !c.cancelled && s.game?.winner && s.members.some(m => m.id === s.game!.winner) ? 1 : 0,
         shots: c.shots, live: c.live, blank: c.blank, ejected: c.ejected, loads: c.loads, items: c.items, damage: c.damage, healing: c.healing, timeouts: c.timeouts,
         durationMs: c.startedAt !== undefined && c.finishedAt !== undefined ? Math.max(0, c.finishedAt - c.startedAt) : 0, unconfirmed: money.status === 'unconfirmed' ? 1 : 0,
         ...Object.fromEntries(MONEY.map(k => [k, money.status === 'unconfirmed' ? 0 : money.totals[k]])) as Money

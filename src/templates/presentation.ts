@@ -8,7 +8,7 @@ import type { view } from '../room/state.js';
 import type { Action } from '../game/types.js';
 
 export interface Part { key: string; values: Record<string, string>; users?: Record<string, string> }
-export interface MessageInput { path?: number[]; scene?: 'group' | 'c2c'; mentionCurrent?: boolean; now?: number; values?: Record<string, string>; room?: ReturnType<typeof view>; parts?: Part[]; moves?: Action[]; offset?: number; actor?: string; dynamic?: Record<string, string>; choices?: string[]; reason?: string; name?: string; notice?: string }
+export interface MessageInput { aiMenu?: 'add' | 'remove'; path?: number[]; scene?: 'group' | 'c2c'; mentionCurrent?: boolean; now?: number; values?: Record<string, string>; room?: ReturnType<typeof view>; parts?: Part[]; moves?: Action[]; offset?: number; actor?: string; dynamic?: Record<string, string>; choices?: string[]; reason?: string; name?: string; notice?: string }
 
 const variables = new WeakMap<ReplyConfiguration['replies'], Map<string, { source: string; names: string[] }>>();
 
@@ -86,7 +86,7 @@ export function createReplyPresentation(render: typeof renderTemplate, escape: t
         return text(config, p.key, v, raw) + (v.replayUrl && ['finish', 'noWinner'].includes(p.key) ? '\n' + text(config, 'replayLink', { url: v.replayUrl }, ['url']) : '');
     }
 
-    function buttons(config: ReplyConfiguration, key: string, dynamic: Record<string, string> = {}, choices: string[] = []) {
+    function buttons(config: ReplyConfiguration, key: string, dynamic: Record<string, string> = {}, choices: string[] = [], labels: string[] = []) {
         const rows: ReplyButton[][] = [];
         const flat: ReplyButton[] = [];
 
@@ -95,12 +95,12 @@ export function createReplyPresentation(render: typeof renderTemplate, escape: t
 
             for (const item of row) {
                 if (item.action === 'choice') {
-                    result.push(...choices.map((data, i) => ({ ...item, label: item.label.replaceAll('{{number}}', String(i + 1)), data })));
+                    result.push(...choices.map((data, i) => ({ ...item, label: labels[i] ?? item.label.replaceAll('{{number}}', String(i + 1)), data })));
                 } else if (item.action === 'link') {
                     const data = item.data ?? dynamic.link;
 
                     if (data) { result.push({ ...item, data }); }
-                } else if (item.action.startsWith('draft') || ['join', 'ready', 'start', 'choose', 'quit', 'confirmCreate', 'confirmQuit', 'next', 'previous', 'menuBack'].includes(item.action)) {
+                } else if (item.action.startsWith('draft') || ['addAI', 'removeAI', 'join', 'ready', 'start', 'choose', 'quit', 'confirmCreate', 'confirmQuit', 'next', 'previous', 'menuBack'].includes(item.action)) {
                     if (dynamic[item.action]) { result.push({ ...item, data: dynamic[item.action] }); }
                 } else { result.push({ ...item }); }
             }
@@ -118,15 +118,24 @@ export function createReplyPresentation(render: typeof renderTemplate, escape: t
     function message(config: ReplyConfiguration, key: string, input: MessageInput = {}, withButtons = true, prepared = preparePresentation(input)) {
         const values = { ...input.values }, raw: string[] = [], dynamic = { ...input.dynamic };
         let choices = input.choices ?? [];
+        let labels: string[] = [];
         const t = (k: string, v: Record<string, string> = {}, r: string[] = []) => text(config, k, v, r);
 
         const group = input.scene === 'group' || input.scene === undefined && !!input.room && !isPrivateScope(input.room.groupId);
         const name = (id: string, value: string) => group && prepared.missingNames.has(id) ? qqAt(id) : escape(value);
         const displayName = (p: { id?: string; name: string; ai?: boolean; life?: number }, mention = true) => t(p.ai ? 'dealerName' : p.life === 0 ? 'eliminatedName' : input.room?.mode !== 'solo' && input.room?.status === 'PLAYING' && p.id === input.room.game?.current ? 'activeName' : 'humanName', { name: !p.ai && mention ? name(p.id ?? '', p.name) : escape(p.name) }, ['name']);
 
-        if (key === 'panel') {
+        if (key === 'aiRoster') {
+            const s = input.room!, base = { gameId: s.gameId, expectedVersion: s.version };
+            const adding = input.aiMenu === 'add';
+            labels = adding ? [0, 1, 2, 3, 4].map(n => t('level' + n)) : (s.opponents ?? []).map(p => p.name);
+            choices = adding ? [0, 1, 2, 3, 4].map(difficulty => JSON.stringify({ ...base, action: { type: 'addAI', difficulty } })) : (s.opponents ?? []).map(p => JSON.stringify({ ...base, action: { type: 'removeAI', target: p.id } }));
+            values.title = t(adding ? 'aiAddTitle' : 'aiRemoveTitle');
+            values.items = labels.map((label, i) => `${i + 1}. ${label}`).join('\n') || t('aiEmpty');
+            raw.push('title', 'items');
+        } else if (key === 'panel') {
             const s = input.room!;
-            const rows = s.game ? s.game.players.map((p, i) => t('player', { number: String(i + 1), name: displayName(p), life: String(p.life), control: p.control === 'none' ? '' : t('controlled'), inventory: p.inventory.length ? p.inventory.map((item, n) => t('inventoryItem', { number: String(n + 1), item: t('item' + item) }, ['item'])).join(t('inventorySeparator')) : t('inventoryEmpty') }, ['name', 'inventory', 'control'])) : s.members.map(p => t('member', { name: displayName(p), ready: t(p.ready ? 'ready' : 'notReady') }, ['name', 'ready']));
+            const rows = s.game ? s.game.players.map((p, i) => t('player', { number: String(i + 1), name: displayName(p), life: String(p.life), control: p.control === 'none' ? '' : t('controlled'), inventory: p.inventory.length ? p.inventory.map((item, n) => t('inventoryItem', { number: String(n + 1), item: t('item' + item) }, ['item'])).join(t('inventorySeparator')) : t('inventoryEmpty') }, ['name', 'inventory', 'control'])) : [...s.members, ...(s.opponents ?? []).map(p => ({ ...p, ai: true, ready: true }))].map(p => t('member', { name: displayName(p), ready: t(p.ready ? 'ready' : 'notReady') }, ['name', 'ready']));
             const { seconds, reading, current } = prepared;
             const timer = reading && s.status === 'PLAYING' && !s.paused && !s.recovery ? t('timerReading', { seconds: String(Math.ceil(reading / 1000)) }) : s.status !== 'PLAYING' ? t(s.game ? 'timerEnded' : 'timerWaiting') : t(s.paused || s.recovery ? 'timerPaused' : 'timer', { seconds });
             const currentName = current ? group && input.mentionCurrent && !current.ai && s.status === 'PLAYING' && !s.paused && !s.recovery ? qqAt(current.id) : current.ai ? escape(current.name) : name(current.id, current.name) : '';
@@ -137,6 +146,14 @@ export function createReplyPresentation(render: typeof renderTemplate, escape: t
             if (s.showAIStyle && s.aiPersonality) { values.stake += '\n' + t('dealerStyle', { style: t('personality' + s.aiPersonality) }, ['style']); }
 
             raw.push('timer', 'status', 'paused', 'recovery', 'stake', 'items', 'turn');
+
+            if (s.status === 'WAITING' && s.mode === 'multi' && s.stake === 0 && !isPrivateScope(s.groupId) && !s.paused && !s.recovery) {
+                if (s.members.length + (s.opponents?.length ?? 0) < 4) { dynamic.addAI = JSON.stringify({ gameId: s.gameId, expectedVersion: s.version, aiMenu: 'add' }); }
+
+                if (s.opponents?.length) { dynamic.removeAI = JSON.stringify({ gameId: s.gameId, expectedVersion: s.version, aiMenu: 'remove' }); }
+
+                values.turn = t('aiWaiting');
+            }
 
             if (withButtons) { for (const action of s.status === 'WAITING' ? ['join', 'ready', 'start'] : s.status === 'PLAYING' ? ['choose', 'quit'] : []) { dynamic[action] = JSON.stringify({ gameId: s.gameId, expectedVersion: s.version, ...(action === 'choose' ? { menu: 0 } : { action: { type: action === 'quit' ? 'confirmQuit' : action } }) }); } }
         } else if (key === 'menu') {
@@ -194,7 +211,7 @@ export function createReplyPresentation(render: typeof renderTemplate, escape: t
         } else if (key === 'create') {
             const mode = values.mode;
             values.mode = t('mode' + mode);
-            values.difficulty = mode === 'Solo' ? t('level' + values.difficulty) : t('humanMatch');
+            values.difficulty = mode === 'Solo' ? t('level' + values.difficulty) : t(mode === 'Multi' && !Number(values.stake) ? 'multiFreeMatch' : 'humanMatch');
             values.stake = Number(values.stake) ? t('stake', { amount: formatPoints(Number(values.stake)) }) : t('free');
 
             if (values.challengeDate) { values.stake += '\n' + t('dailyLabel', { date: values.challengeDate }) + '\n' + t('dailyHint'); }
@@ -221,7 +238,7 @@ export function createReplyPresentation(render: typeof renderTemplate, escape: t
 
         const content = t(key, values, raw);
 
-        return { text: input.notice ? t(input.notice) + '\n' + content : content, buttons: withButtons ? buttons(config, key, dynamic, choices).map(row => key === 'lobby' && input.scene === 'c2c' ? row.filter(b => b.action !== 'duo' && b.action !== 'multi') : row).filter(row => row.length) : [] };
+        return { text: input.notice ? t(input.notice) + '\n' + content : content, buttons: withButtons ? buttons(config, key, dynamic, choices, labels).map(row => key === 'lobby' && input.scene === 'c2c' ? row.filter(b => b.action !== 'duo' && b.action !== 'multi') : row).filter(row => row.length) : [] };
     }
 
     return { message, maxBytes };

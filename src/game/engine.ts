@@ -55,7 +55,7 @@ function load(game: Game, rng: RNG, events: GameEvent[]): void {
 export function createGame(mode: Mode, players: Pick<Player, 'id' | 'name' | 'ai'>[], rng: RNG = secureRandom): { game: Game; events: GameEvent[] } {
     requireRule(new Set(players.map(p => p.id)).size === players.length, '玩家重复');
     requireRule(mode === 'multi' ? players.length >= 3 && players.length <= 4 : players.length === 2, '人数不符合模式');
-    requireRule(mode === 'solo' ? players.filter(p => p.ai).length === 1 : players.every(p => !p.ai), 'AI 不符合模式');
+    requireRule(mode === 'solo' ? players.filter(p => p.ai).length === 1 : mode === 'multi' ? players.some(p => !p.ai) : players.every(p => !p.ai), 'AI 不符合模式');
     const seats = shuffle(players.map(p => ({ ...p, life: 4, inventory: [], control: 'none', timeouts: 0 } as Player)), rng);
     const game: Game = { mode, players: seats, current: seats[0].id, direction: 1, turn: 1, loadId: 0, shells: [], cursor: 0, saw: false, shot: false, knowledge: {}, finished: false, winner: null };
     const events: GameEvent[] = [];

@@ -75,10 +75,8 @@ export function chooseAction(view: AIView, level: number, rng: RNG = secureRando
         return ranked.filter(r => r.value === ranked[0].value).reduce((a, b) => preference(view, b.action, personality) > preference(view, a.action, personality) ? b : a).action;
     }
 
-    const opponent = initial.players.find(p => p.id !== actor && p.life > 0)!;
-
     // 无需让出行动权的确定收益先执行，避免浅层评价忽略情报与治疗价值。
-    const forced = ranked.find(({ action }) => action.type === 'shoot' && action.target !== actor && probability === 1 && opponent.life <= (initial.saw ? 2 : 1))
+    const forced = ranked.find(({ action }) => action.type === 'shoot' && action.target !== actor && probability === 1 && initial.players.find(p => p.id === action.target)!.life <= (initial.saw ? 2 : 1))
         ?? ranked.find(({ action }) => {
             if (action.type !== 'item') { return false; }
 

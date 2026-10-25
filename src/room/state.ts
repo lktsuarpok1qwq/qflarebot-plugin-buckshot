@@ -122,6 +122,9 @@ export function events(s: RoomState, values: GameEvent[], oldTurn: number, now: 
 export function startGame(s: RoomState, now: number): void {
     const players = s.members.map(p => ({ id: p.id, name: p.name, ai: false }));
 
+    requireRule(!s.opponents?.length || s.mode === 'multi' && s.stake === 0 && !isPrivateScope(s.groupId) && s.members.length > 0, '人机仅支持多人免费房间');
+    players.push(...(s.opponents ?? []).map(p => ({ id: p.id, name: p.name, ai: true })));
+
     if (s.mode === 'solo') { players.push({ id: 'ai', name: '庄家', ai: true }); }
 
     if (s.challenge) {
@@ -214,7 +217,7 @@ export function cancelGame(s: RoomState, now: number): void {
 
 export function mutate(s: RoomState, request: Request, admin: boolean, now: number): void {
     const a = request.action, id = request.actor;
-    requireRule(a && ['join', 'leave', 'ready', 'start', 'confirmQuit', 'quit', 'play', 'pause', 'resume', 'cancel', 'retry', 'removed', 'abort', 'reconcile'].includes(a.type), '操作类型无效');
+    requireRule(a && ['addAI', 'removeAI', 'join', 'leave', 'ready', 'start', 'confirmQuit', 'quit', 'play', 'pause', 'resume', 'cancel', 'retry', 'removed', 'abort', 'reconcile'].includes(a.type), '操作类型无效');
 
     if (['pause', 'resume', 'cancel', 'retry', 'removed', 'abort', 'reconcile'].includes(a.type)) { requireRule(admin, '仅管理入口允许此操作'); } else { requireRule(!s.paused && !s.recovery, '房间已暂停或等待恢复'); }
 
@@ -222,10 +225,29 @@ export function mutate(s: RoomState, request: Request, admin: boolean, now: numb
     requireRule(!s.reserved || s.reserveUntil! > now || admin, '本金预留已到期，等待善后');
     const member = s.members.find(p => p.id === id);
 
-    if (a.type === 'join') {
+    if (a.type === 'addAI' || a.type === 'removeAI') {
+        requireRule(s.mode === 'multi' && s.stake === 0 && !isPrivateScope(s.groupId), '人机仅支持多人免费房间');
+        requireRule(s.status === 'WAITING' && member && s.host === id, '仅等待中的房主可以管理人机');
+        const opponents = s.opponents ?? [];
+
+        if (a.type === 'addAI') {
+            requireRule(Number.isInteger(a.difficulty) && a.difficulty >= 0 && a.difficulty <= 4, '难度无效');
+            requireRule(s.members.length + opponents.length < 4, '房间已满，真人和人机合计最多4人');
+            let number = 1;
+
+            while (opponents.some(p => p.name.startsWith('人机' + number + '（'))) { number++; }
+
+            opponents.push({ id: 'ai:' + crypto.randomUUID(), name: `人机${number}（${DEFAULT_REPLIES['level' + a.difficulty]}）`, difficulty: a.difficulty, personality: PERSONALITIES[secureRandom(PERSONALITIES.length)] });
+        } else {
+            requireRule(opponents.some(p => p.id === a.target), '该人机已移除，请查看最新面板');
+        }
+
+        s.opponents = a.type === 'removeAI' ? opponents.filter(p => p.id !== a.target) : opponents;
+        s.members.forEach(p => p.ready = false);
+    } else if (a.type === 'join') {
         requireRule(!isPrivateScope(s.groupId), '私聊只支持单人对局');
-        requireRule(s.status === 'WAITING' && s.mode !== 'solo' && s.members.length < (s.mode === 'duo' ? 2 : 4), '当前不能加入');
-        requireRule(!member && a.member.id === id, '已加入或身份不符');
+        requireRule(s.status === 'WAITING' && s.mode !== 'solo' && s.members.length + (s.opponents?.length ?? 0) < (s.mode === 'duo' ? 2 : 4), '当前不能加入');
+        requireRule(!member && a.member.id === id && id !== 'ai' && !id.startsWith('ai:'), '已加入或身份不符');
         s.members.push({ ...a.member, name: playerName(a.member.name, s.members) });
         s.members.forEach(p => p.ready = false);
     } else if (a.type === 'leave') {
@@ -235,13 +257,18 @@ export function mutate(s: RoomState, request: Request, admin: boolean, now: numb
         s.members.forEach(p => p.ready = false);
         s.host = s.members[0]?.id ?? '';
 
-        if (!s.host) { s.status = 'CANCELLED'; }
+        if (!s.host) {
+            s.status = 'CANCELLED';
+            s.opponents = [];
+        }
     } else if (a.type === 'ready') {
         requireRule(s.status === 'WAITING' && member, '当前不能准备');
         member.ready = true;
     } else if (a.type === 'start') {
         requireRule(s.status === 'WAITING' && s.host === id, '仅等待中的房主可以开始');
-        requireRule(s.mode === 'solo' || s.members.length >= (s.mode === 'duo' ? 2 : 3) && s.members.every(p => p.ready), '人数不足或尚未全部准备');
+        requireRule(s.mode === 'solo' || s.members.length > 0 && s.members.length + (s.opponents?.length ?? 0) >= (s.mode === 'duo' ? 2 : 3) && s.members.every(p => p.ready), '人数不足或尚未全部准备');
+
+        requireRule(!s.opponents?.length || s.mode === 'multi' && s.stake === 0, '人机仅支持多人免费房间');
 
         if (s.stake) { reserve(s, now); } else { startGame(s, now); }
     } else if (a.type === 'confirmQuit') {
@@ -258,7 +285,10 @@ export function mutate(s: RoomState, request: Request, admin: boolean, now: numb
         s.members.forEach(m => m.ready = false);
         s.host = s.members[0]?.id ?? '';
 
-        if (!s.host) { s.status = 'CANCELLED'; }
+        if (!s.host) {
+            s.status = 'CANCELLED';
+            s.opponents = [];
+        }
     } else if (a.type === 'quit' || a.type === 'removed') {
         const target = a.type === 'removed' ? a.target : id;
 
@@ -366,7 +396,9 @@ export function tick(s: RoomState, now: number, immediateAI = false, onAction?: 
     } else if (s.aiDue !== undefined && (immediateAI || s.aiDue <= now)) {
         let move;
 
-        try { move = chooseAction(observe(game), s.difficulty, roomRandom(s, true), s.challenge ? Infinity : s.config.values.aiBudgetMs, s.aiPersonality); } catch { move = { type: 'shoot' as const, target: game.players.find(p => p.life > 0 && p.id !== game.current)!.id }; }
+        const opponent = s.opponents?.find(p => p.id === game.current);
+
+        try { move = chooseAction(observe(game), opponent?.difficulty ?? s.difficulty, roomRandom(s, true), s.challenge ? Infinity : s.config.values.aiBudgetMs, opponent?.personality ?? s.aiPersonality); } catch { move = { type: 'shoot' as const, target: game.players.find(p => p.life > 0 && p.id !== game.current)!.id }; }
 
         const result = applyAction(game, game.current, move, roomRandom(s));
         onAction?.(oldCurrent, move);
@@ -389,6 +421,7 @@ export function view(s: RoomState) {
     return {
         ...(s.challenge ? { challengeDate: s.challenge.date } : {}), ...(s.aiPersonality ? { aiPersonality: s.aiPersonality } : {}),
         gameId: s.gameId, groupId: s.groupId, version: s.version, status: s.status, mode: s.mode, stake: s.stake, difficulty: s.difficulty,
+        opponents: (s.opponents ?? []).map(({ id, name, difficulty, personality }) => ({ id, name, difficulty, ...(s.config.values.showAIStyle ? { personality } : {}) })),
         showAIStyle: s.config.values.showAIStyle === true, recallSeconds: s.config.values.recallSeconds, host: s.host, members: s.members.map(({ id, name, ready, claimId, nameLookupAt }) => ({ id, name, ready, ...(claimId !== undefined ? { claimId } : {}), ...(nameLookupAt !== undefined ? { nameLookupAt } : {}) })), paused: s.paused, recovery: s.recovery,
         ...(s.reason !== undefined ? { reason: s.reason } : {}), ...(s.deadline !== undefined ? { deadline: s.deadline } : {}), remainingMs: s.remainingMs, ...(s.aiReadUntil !== undefined ? { aiReadUntil: s.aiReadUntil } : {}), ...(s.game ? { game: publicGame(s.game) } : {}),
         tasks: pendingTasks(s),

@@ -141,7 +141,7 @@ export async function interact(ctx: PluginContext, session: Session, data: unkno
     const templates = settings ?? DEFAULT_CONFIGURATION;
     const scope = scopeFor(session);
     requireRule(data && typeof data === 'object', '操作无效');
-    const input = data as { setup?: unknown; create?: { mode: Mode; stake: number; difficulty: number }; owner?: string; gameId: string; expectedVersion: number; action?: Request['action']; menu?: number; path?: number[] };
+    const input = data as { aiMenu?: 'add' | 'remove'; setup?: unknown; create?: { mode: Mode; stake: number; difficulty: number }; owner?: string; gameId: string; expectedVersion: number; action?: Request['action']; menu?: number; path?: number[] };
     requireRule(session.scene !== 'c2c' || input.action?.type !== 'join', '私聊只支持单人对局');
 
     if (input.setup !== undefined) {
@@ -156,6 +156,18 @@ export async function interact(ctx: PluginContext, session: Session, data: unkno
         requireRule(input.owner === session.userId, '仅创建者可确认');
 
         return confirmCreate(ctx, session, input.gameId, templates, input.create, requestConfig);
+    }
+
+    if (input.aiMenu !== undefined) {
+        requireRule(input.aiMenu === 'add' || input.aiMenu === 'remove', '操作无效');
+        const current = await room.publicState();
+        requireRule(current && current.gameId === input.gameId, '房间已失效');
+        requireRule(current.mode === 'multi' && current.stake === 0 && session.scene === 'group', '人机仅支持多人免费房间');
+        requireRule(current.status === 'WAITING' && current.host === session.userId, '仅等待中的房主可以管理人机');
+        requireRule(!current.paused && !current.recovery, '房间已暂停或等待恢复');
+        requireRule(input.aiMenu !== 'add' || current.members.length + current.opponents.length < 4, '房间已满，真人和人机合计最多4人');
+
+        return renderMessage(templates, 'aiRoster', { room: current, aiMenu: input.aiMenu });
     }
 
     if (input.menu !== undefined) {
@@ -196,6 +208,8 @@ export async function interact(ctx: PluginContext, session: Session, data: unkno
         const result = await room.act(request);
 
         if (result.stale) {
+            if (result.room.status === 'WAITING') { return renderMessage(templates, 'panel', { room: result.room, notice: result.notice }); }
+
             const snapshot = await room.menu(input.gameId, session.userId);
             await supplementName(ctx, room, snapshot.room, session);
             snapshot.name = snapshot.room.members.find(m => m.id === session.userId)?.name ?? snapshot.name;

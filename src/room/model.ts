@@ -4,6 +4,7 @@ import type { Action, Game, Mode } from '../game/types.js';
 
 export type Status = 'WAITING' | 'PREPARING' | 'PLAYING' | 'FINISHED' | 'SETTLING' | 'SETTLED' | 'CLOSED' | 'CANCELLED';
 export interface Member { id: string; name: string; ready: boolean; privateId: string; claimId?: string; nameLookupAt?: number }
+export interface Opponent { id: string; name: string; difficulty: number; personality: import('../game/personality.js').Personality }
 export interface PanelReference { gameId: string; version: number; status: Status; order: string }
 export interface PanelReceipt extends PanelReference { messageId: string }
 export interface Task {
@@ -26,7 +27,7 @@ export interface RoomState {
     replayBase?: string;
     schemaVersion: 2; gameId: string; botId: string; groupId: string; host: string;
     version: number; status: Status; mode: Mode; stake: number; difficulty: number;
-    config: ConfigSnapshot; createdAt: number; members: Member[]; game?: Game;
+    config: ConfigSnapshot; createdAt: number; members: Member[]; opponents?: Opponent[]; game?: Game;
     paused: boolean; recovery: boolean; reason?: string; remainingMs: number; deadline?: number; reminderSent: boolean;
     aiDue?: number; aiReadUntil?: number; aiPaceUntil?: number; outbox: Task[]; seq: number; money: MoneyTask[]; reserved: boolean;
     reserveAt?: number; reserveUntil?: number; renewal: number; released: string[];
@@ -35,6 +36,7 @@ export interface RoomState {
 export interface Request {
     gameId: string; actionId: string; expectedVersion: number; actor: string;
     action: { type: 'join'; member: Member } | { type: 'leave' } | { type: 'ready' } | { type: 'start' }
+    | { type: 'addAI'; difficulty: number } | { type: 'removeAI'; target: string }
     | { type: 'confirmQuit' } | { type: 'quit' } | { type: 'play'; move: Action }
     | { type: 'pause' } | { type: 'resume' } | { type: 'cancel' } | { type: 'retry'; taskId: string; plain?: boolean }
     | { type: 'reconcile'; taskId: string } | { type: 'removed'; target: string } | { type: 'abort' };

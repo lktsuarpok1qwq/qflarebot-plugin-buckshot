@@ -164,7 +164,7 @@ export class BuckshotRoom extends StoredObject {
         identifier(input.groupId);
         identifier(input.member.id);
         identifier(input.member.privateId);
-        requireRule(['solo', 'duo', 'multi'].includes(input.mode) && input.member.id !== 'ai', '模式或玩家无效');
+        requireRule(['solo', 'duo', 'multi'].includes(input.mode) && input.member.id !== 'ai' && !input.member.id.startsWith('ai:'), '模式或玩家无效');
         requireRule(Number.isInteger(input.difficulty) && input.difficulty >= 0 && input.difficulty <= 4, '难度无效');
         validateConfig(input.config.values);
         requireRule(Number.isSafeInteger(input.stake) && input.stake >= 0, '下注金额无效');
