@@ -3,7 +3,7 @@ import type { view } from '../room/state.js';
 // 只解释本次查询快照，不轮询、不推断资金到账，也不自动重试任何操作。
 export function explainRoom(room: ReturnType<typeof view>, now: number) {
     const lines: string[] = [], warnings: string[] = [];
-    const names = { reserve: '冻结下注', settle: '结算', release: '退回本金', renew: '延长冻结' };
+    const names = { credit: '每日挑战奖励', reserve: '冻结下注', settle: '结算', release: '退回本金', renew: '延长冻结' };
     const states = { PENDING: '等待处理', SENDING: '正在处理', DONE: '已处理', FAILED: '处理失败', UNKNOWN: '结果未知' };
     const unresolved = room.funds.filter(t => t.state === 'UNKNOWN' || t.state === 'FAILED');
     const busyFunds = room.funds.filter(t => t.state === 'PENDING' || t.state === 'SENDING');

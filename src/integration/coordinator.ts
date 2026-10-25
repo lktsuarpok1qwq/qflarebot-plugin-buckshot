@@ -43,11 +43,11 @@ export async function coordinateCreate(ctx: PluginContext, input: CreateInput, e
     let name: AdmissionName;
 
     try {
-        name = await registry.claim({ botId: ctx.botId, userId: input.member.id, gameId: input.gameId, groupId: input.groupId, claimId: input.gameId }, eventName);
+        name = await registry.claim({ botId: ctx.botId, userId: input.member.id, gameId: input.gameId, groupId: input.groupId, claimId: input.gameId, ...(input.challenge ? { challengeDate: input.challenge.date } : {}) }, eventName);
     } catch (error) {
         const actual = await registryFor(ctx, input.member.id).owner();
 
-        if (actual && actual.gameId !== input.gameId) {
+        if (actual && actual.gameId !== input.gameId || error instanceof Error && error.message === '今日挑战已使用，请明天再来') {
             await room.abandonCreation(input.gameId);
             await ctx.db.run('UPDATE {rooms} SET status=?,due=? WHERE bot=? AND group_id=? AND game=?', 'CLOSED', null, ctx.botId, input.groupId, input.gameId);
         }
@@ -239,7 +239,7 @@ export async function drain(ctx: PluginContext, group: string, session?: Session
         try {
             for (const id of work.release) {
                 const history = work.history ? (({ results, ...record }) => ({ ...record, ...(results[id] ? { result: results[id] } : {}) }))(work.history) : undefined;
-                await registryFor(ctx, id).release(work.gameId, work.room.members.find(m => m.id === id)?.claimId ?? work.gameId, history);
+                await registryFor(ctx, id).release(work.gameId, work.room.members.find(m => m.id === id)?.claimId ?? work.gameId, history, !!work.room.game);
                 released.push(id);
             }
         } finally {
@@ -255,7 +255,7 @@ export async function drain(ctx: PluginContext, group: string, session?: Session
 
 export async function cron(ctx: PluginContext): Promise<void> {
     const stopAt = Date.now() + 20000;
-    await ctx.db.run('DELETE FROM {coord_ops} WHERE rowid IN (SELECT rowid FROM {coord_ops} WHERE bot=? AND state=? AND expires_at<=? LIMIT 20)', ctx.botId, 'CREATE_READY', Date.now());
+    await ctx.db.run('DELETE FROM {coord_ops} WHERE rowid IN (SELECT rowid FROM {coord_ops} WHERE bot=? AND state IN (?,?) AND expires_at<=? LIMIT 20)', ctx.botId, 'CREATE_READY', 'NAVIGATION', Date.now());
     const pending = await ctx.db.all<{ request: string }>('SELECT request FROM {coord_ops} WHERE bot=? AND state=? LIMIT 4', ctx.botId, 'PENDING');
 
     for (const row of pending) {

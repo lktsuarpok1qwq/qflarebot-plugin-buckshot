@@ -1,3 +1,4 @@
+import { moneyReason } from './money-reason.js';
 import { roomRandom, type RandomState } from '../game/random.js';
 import { PERSONALITIES } from '../game/personality.js';
 import { secureRandom } from '../game/types.js';
@@ -135,14 +136,27 @@ export function reserve(s: RoomState, now: number): void {
     s.money.push({
         id: `${s.gameId}:reserve`, kind: 'reserve', state: 'PENDING', input: {
             source: 'buckshot', operationId: `${s.gameId}:reserve`, referenceId: `buckshot:${s.gameId}`, expiresAtMs: s.reserveUntil,
-            reason: `恶魔轮盘：冻结对局本金，从可用余额转入冻结余额；房间 ${s.gameId}`,
+            reason: moneyReason(s, 'reserve'),
             funds: s.members.map((m, i) => ({ userId: m.id, amountMinor: s.stake, reservationId: `${s.gameId}:r:${i}` }))
         }
     });
 }
 
 export function settlement(s: RoomState): void {
-    if (s.money.some(t => t.kind === 'settle' || t.kind === 'release')) { return; }
+    if (s.money.some(t => t.kind === 'settle' || t.kind === 'release' || t.kind === 'credit')) { return; }
+
+    if (s.challenge && s.status !== 'CANCELLED' && s.game?.winner === s.host && s.config.values.dailyReward > 0) {
+        const amount = s.config.values.dailyReward;
+        s.money.push({
+            id: `${s.gameId}:challenge-reward`, kind: 'credit', state: 'PENDING', input: {
+                source: 'buckshot', operationId: `${s.gameId}:challenge-reward`, referenceId: `buckshot:${s.gameId}`,
+                userId: s.host, amountMinor: amount, reason: moneyReason(s, 'credit', amount)
+            }
+        });
+        s.status = 'SETTLING';
+
+        return;
+    }
 
     if (!s.stake || !s.reserved) { return; }
 
@@ -150,7 +164,7 @@ export function settlement(s: RoomState): void {
         s.members.forEach((_, i) => s.money.push({
             id: `${s.gameId}:release:${i}`, kind: 'release', state: 'PENDING', input: {
                 source: 'buckshot', operationId: `${s.gameId}:release:${i}`, referenceId: `buckshot:${s.gameId}`, reservationId: `${s.gameId}:r:${i}`,
-                reason: `恶魔轮盘：${s.status === 'CANCELLED' ? '对局取消' : '对局无胜者'}，退回冻结本金；房间 ${s.gameId}`
+                reason: moneyReason(s, 'release')
             }
         }));
     } else {
@@ -159,7 +173,7 @@ export function settlement(s: RoomState): void {
         s.money.push({
             id: `${s.gameId}:settle`, kind: 'settle', state: 'PENDING', input: {
                 source: 'buckshot', operationId: `${s.gameId}:settle`, referenceId: `buckshot:${s.gameId}`,
-                reason: `恶魔轮盘：${aiWon ? '人机对局失败，扣除冻结本金' : s.mode === 'solo' ? '人机对局获胜，返还本金并发放奖励' : '真人对局结算，冻结本金池发放给胜者'}；房间 ${s.gameId}`,
+                reason: moneyReason(s, 'settle', reward),
                 funds: s.members.map((_, i) => ({ reservationId: `${s.gameId}:r:${i}`, payouts: aiWon ? [] : [{ userId: winner, amountMinor: s.stake }], burnMinor: aiWon ? s.stake : 0 })),
                 rewards: reward > 0 ? [{ userId: winner, amountMinor: reward }] : []
             }

@@ -2,13 +2,16 @@ import { replayImportMarkup } from './viewer/tools.js';
 import { replayStyle, replayViewerMarkup, replayPlayerScript } from './viewer/player.js';
 
 // 独立页面不使用管理 Bridge，不读取面板凭据，不提供公开列表。
-export const replayPage = String.raw`<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><meta name="robots" content="noindex,nofollow"><title>恶魔轮盘 · 对局回放</title><link rel="stylesheet" href="/tokens.css"><style>
-*{box-sizing:border-box}body{margin:0;color:var(--qb-fg);background:var(--qb-bg);font:16px/1.6 var(--qb-font-sans)}main{max-width:1100px;margin:auto;padding:20px}.qb-card{padding:18px;margin-bottom:16px}.actions{display:flex;gap:10px;flex-wrap:wrap;margin:12px 0}button,select,input{font:inherit;color:var(--qb-fg);background:var(--qb-surface);border:1px solid var(--qb-border-strong);border-radius:var(--qb-radius);padding:8px 12px}button{cursor:pointer}button:disabled{opacity:.5;cursor:default}:focus-visible{outline:2px solid var(--qb-ring)}pre{white-space:pre-wrap;overflow-wrap:anywhere}h1{font-size:24px}.hint{color:var(--qb-fg-muted)}a{color:var(--qb-on-primary);text-decoration:underline}${replayStyle}
-</style></head><body class="qb-page"><main id="replay"><h1>🎲 对局回放</h1>${replayImportMarkup}<p id="notice" role="status"></p><button id="retryFailed" hidden>重试加载</button>${replayViewerMarkup}</main><script type="module">
+export const replayPage = String.raw`<!doctype html><html lang="zh-CN" data-theme="dark"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><meta name="robots" content="noindex,nofollow"><title>恶魔轮盘 · 对局回放</title><link rel="stylesheet" href="/tokens.css"><style>
+*{box-sizing:border-box}body{margin:0;color:var(--qb-fg);background:var(--qb-bg);font:16px/1.6 var(--qb-font-sans)}main{max-width:1100px;margin:auto;padding:20px}.qb-card{padding:18px;margin-bottom:16px}.actions{display:flex;gap:10px;flex-wrap:wrap;margin:12px 0}button,select,input{font:inherit;color:var(--qb-fg);background:var(--qb-surface);border:1px solid var(--qb-border-strong);border-radius:var(--qb-radius);padding:8px 12px}button{cursor:pointer}button:disabled{opacity:.5;cursor:default}:focus-visible{outline:2px solid var(--qb-ring)}pre{white-space:pre-wrap;overflow-wrap:anywhere}h1{font-size:24px;margin:0}.replay-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:20px}#replayTheme{min-width:110px;min-height:44px;border-radius:var(--qb-radius-full)}.hint{color:var(--qb-fg-muted)}a{color:var(--qb-on-primary);text-decoration:underline}${replayStyle}
+</style></head><body class="qb-page"><main id="replay"><header class="replay-heading"><h1>🎲 对局回放</h1><button id="replayTheme" type="button" aria-label="切换到白天模式">白天模式</button></header>${replayImportMarkup}<p id="notice" role="status"></p><button id="retryFailed" hidden>重试加载</button>${replayViewerMarkup}</main><script type="module">
 const $ = id => document.getElementById(id);
-const theme = matchMedia('(prefers-color-scheme: dark)');
-const applyTheme = () => document.documentElement.dataset.theme = theme.matches ? 'dark' : 'light';
-applyTheme(); theme.addEventListener('change', applyTheme);
+$('replayTheme').onclick = () => {
+    const light = document.documentElement.dataset.theme !== 'light';
+    document.documentElement.dataset.theme = light ? 'light' : 'dark';
+    $('replayTheme').textContent = light ? '黑夜模式' : '白天模式';
+    $('replayTheme').setAttribute('aria-label', light ? '切换到黑夜模式' : '切换到白天模式');
+};
 function toast(text) { $('notice').textContent = text; }
 ${replayPlayerScript}
 replayLocalStart = () => {

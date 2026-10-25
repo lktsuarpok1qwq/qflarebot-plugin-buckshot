@@ -1,4 +1,4 @@
-import { challengeDate, type Challenge } from '../game/random.js';
+import { challengeDate, challengeDifficulty, type Challenge } from '../game/random.js';
 import { registryFor } from './coordinator.js';
 import { scopeFor, validateConversation } from '../conversation.js';
 import { cleanName } from '../room/names.js';
@@ -33,7 +33,7 @@ export async function prepareCreate(ctx: PluginContext, session: Session, args: 
     const create = { ...(challenge ? { challenge } : {}), mode, stake, difficulty, gameId, botId: ctx.botId, groupId: scopeFor(session), config, member: { id: session.userId, name: cleanName(session.userName), ready: true, privateId: session.userId } };
     await ctx.db.run('INSERT INTO {coord_ops}(bot,id,game_id,request,state,expires_at) VALUES(?,?,?,?,?,?)', ctx.botId, `create:${gameId}`, gameId, JSON.stringify({ input: create, expiresAt }), 'CREATE_READY', expiresAt);
 
-    return renderMessage(templates, 'create', { values: { ...(challenge ? { challengeDate: challenge.date } : {}), mode: modeKey(mode), stake: String(stake), difficulty: String(difficulty), reward: stake ? String(payout(stake, config.values.multipliers[difficulty])) : '', gameId }, dynamic: { confirmCreate: JSON.stringify({ create: { mode, stake, difficulty }, owner: session.userId, gameId }) } });
+    return renderMessage(templates, 'create', { values: { ...(challenge ? { challengeDate: challenge.date, dailyReward: String(config.values.dailyReward) } : {}), mode: modeKey(mode), stake: String(stake), difficulty: String(difficulty), reward: stake ? String(payout(stake, config.values.multipliers[difficulty])) : '', gameId }, dynamic: { confirmCreate: JSON.stringify({ create: { mode, stake, difficulty }, owner: session.userId, gameId }) } });
 }
 
 async function pointsReason(ctx: PluginContext, mode: Mode): Promise<string | undefined> {
@@ -104,20 +104,13 @@ export async function chooseCreation(ctx: PluginContext, session: Session, args:
 }
 
 export async function prepareChallenge(ctx: PluginContext, session: Session, args: string[], templates: ReplyConfiguration, request?: RequestConfig) {
-    requireRule(args.length <= 1 && (!args.length || DIFFICULTIES.includes(args[0])), '每日挑战参数无效');
+    requireRule(args.length === 0, '每日挑战难度由当天种子固定，不能选择');
     validateConversation(scopeFor(session), 'solo', session.userId);
     const config = await configuration(ctx, session, request), date = challengeDate();
 
     if (!config.values.freeEnabled) { return renderMessage(templates, 'setupBlocked', { values: { mode: 'Solo' }, reason: 'setupFreeDisabled', dynamic: { draftBack: '/恶魔轮盘 新建 单人' } }); }
 
-    if (!args.length) {
-        const dynamic = Object.fromEntries(DIFFICULTIES.map((level, i) => [`draftLevel${i}`, `/恶魔轮盘 挑战 ${level}`]));
-        dynamic.draftBack = '/恶魔轮盘 新建 单人';
-
-        return renderMessage(templates, 'setupDifficulty', { values: { mode: 'Solo', stake: '0', challengeDate: date }, dynamic });
-    }
-
     const challenge = await registryFor(ctx, session.userId).dailyChallenge(date, session.userId);
 
-    return prepareCreate(ctx, session, ['单人', '免费', args[0]], templates, config, request, challenge);
+    return prepareCreate(ctx, session, ['单人', '免费', DIFFICULTIES[challengeDifficulty(challenge)]], templates, config, request, challenge);
 }

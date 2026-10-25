@@ -94,6 +94,20 @@ export function confirmedMoney(s: RoomState) {
     const people = Object.fromEntries(s.members.map(m => [m.id, { stake: 0, returned: 0, reward: 0, net: 0 }]));
     const result = (status: 'free' | 'confirmed' | 'unconfirmed') => ({ status, totals, people });
 
+    const credit = s.money.find(t => t.kind === 'credit');
+
+    if (credit) {
+        const input = credit.input as Parameters<import('qflarebot-plugin-points').PointsService['credit']>[0];
+
+        if (credit.state !== 'DONE' || credit.resolution !== 'committed' || !people[input.userId]) { return result('unconfirmed'); }
+
+        people[input.userId].reward = input.amountMinor;
+        people[input.userId].net = input.amountMinor;
+        totals.reward = input.amountMinor;
+
+        return result('confirmed');
+    }
+
     if (!s.stake) { return result('free'); }
 
     if (s.money.some(t => !(t.state === 'DONE' && t.resolution || t.kind === 'reserve' && t.state === 'FAILED'))) { return result('unconfirmed'); }

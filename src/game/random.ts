@@ -4,11 +4,12 @@ import { dateParts } from '../replay/format.js';
 
 export type RandomState = [number, number, number, number];
 export interface Challenge { date: string; seed: number[] }
+export const challengeDifficulty = (challenge: Challenge): number => Math.floor(challenge.seed[7] / 0x100000000 * 5);
 export const challengeDate = (time = Date.now()) => dateParts(time).date;
 
-export function validateChallenge(input: Pick<CreateInput, 'challenge' | 'mode' | 'stake'>): void {
+export function validateChallenge(input: Pick<CreateInput, 'challenge' | 'mode' | 'stake' | 'difficulty'>): void {
     const c = input.challenge;
-    requireRule(!c || input.mode === 'solo' && input.stake === 0 && /^\d{4}-\d{2}-\d{2}$/.test(c.date) && Array.isArray(c.seed) && c.seed.length === 8 && c.seed.every(n => Number.isInteger(n) && n >= 0 && n <= 0xffffffff) && c.seed.slice(0, 4).some(Boolean) && c.seed.slice(4).some(Boolean), '每日挑战参数无效');
+    requireRule(!c || input.mode === 'solo' && input.stake === 0 && /^\d{4}-\d{2}-\d{2}$/.test(c.date) && Array.isArray(c.seed) && c.seed.length === 8 && c.seed.every(n => Number.isInteger(n) && n >= 0 && n <= 0xffffffff) && c.seed.slice(0, 4).some(Boolean) && c.seed.slice(4).some(Boolean) && input.difficulty === challengeDifficulty(c), '每日挑战参数无效');
 }
 
 // 只有北京时间日期和统一 OpenID 进入消息；服务端密钥防止从公开身份推算隐藏弹仓。

@@ -20,8 +20,8 @@ export function decodeAdminConfig(input: unknown): unknown {
 
     const value = { ...input } as Record<string, unknown>;
 
-    for (const key of ['minStake', 'maxStake', 'rewardLimit']) {
-        if (Object.hasOwn(value, key)) { value[key] = parsePoints(value[key], key === 'rewardLimit'); }
+    for (const key of ['minStake', 'maxStake', 'rewardLimit', 'dailyReward']) {
+        if (Object.hasOwn(value, key)) { value[key] = parsePoints(value[key], ['rewardLimit', 'dailyReward'].includes(key)); }
     }
 
     if (Object.hasOwn(value, 'multipliers')) {

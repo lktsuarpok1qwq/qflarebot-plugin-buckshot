@@ -14,7 +14,7 @@ import { supplementName } from './nickname.js';
 import { base } from './panel.js';
 import { ensureDatabase, readRequestConfig, type RequestConfig } from './database.js';
 import { coordinateCreate, coordinateJoin, drain, roomFor, registryFor } from './coordinator.js';
-import { preflight } from './points.js';
+import { preflight, preflightChallenge } from './points.js';
 import { identifier } from '../config.js';
 import { challengeDate } from '../game/random.js';
 import { chooseCreation, prepareCreate, prepareChallenge } from './creation.js';
@@ -122,6 +122,8 @@ async function confirmCreate(ctx: PluginContext, session: Session, gameId: strin
         const current = await readRequestConfig(ctx, requestConfig);
         requireRule(current.globalVersion === authorized.config.globalVersion, '创建配置已更新，请重新选择');
         await preflight(ctx, [session.userId], authorized.stake);
+
+        if (authorized.challenge) { await preflightChallenge(ctx, session.userId, authorized.config.values.dailyReward); }
     }
 
     const create = prior ?? authorized;
@@ -144,7 +146,7 @@ export async function interact(ctx: PluginContext, session: Session, data: unkno
     requireRule(session.scene !== 'c2c' || input.action?.type !== 'join', '私聊只支持单人对局');
 
     if (input.setup !== undefined) {
-        requireRule(Array.isArray(input.setup) && input.setup.length >= 2 && input.setup.length <= 4 && input.setup.every(v => typeof v === 'string' && v.length > 0 && !/\s/.test(v)) && ['新建', '创建', '挑战'].includes(input.setup[0]), '创建参数无效，发送 /恶魔轮盘 帮助');
+        requireRule(Array.isArray(input.setup) && input.setup.length >= 1 && input.setup.length <= 4 && input.setup.every(v => typeof v === 'string' && v.length > 0 && !/\s/.test(v)) && ['新建', '创建', '挑战'].includes(input.setup[0]), '创建参数无效，发送 /恶魔轮盘 帮助');
 
         return input.setup[0] === '挑战' ? prepareChallenge(ctx, session, input.setup.slice(1), templates, requestConfig) : input.setup[0] === '新建' ? chooseCreation(ctx, session, input.setup.slice(1), templates, requestConfig) : prepareCreate(ctx, session, input.setup.slice(1), templates, undefined, requestConfig);
     }

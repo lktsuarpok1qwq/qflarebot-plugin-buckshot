@@ -190,7 +190,7 @@ export function createReplyPresentation(render: typeof renderTemplate, escape: t
 
             if (values.challengeDate) { values.stake += '\n' + t('dailyLabel', { date: values.challengeDate }) + '\n' + t('dailyHint'); }
 
-            values.reward = values.reward ? (mode === 'Solo' ? t('soloReward', { amount: formatPoints(Number(values.reward)) }) : t('multiReward')) : '';
+            values.reward = values.challengeDate ? t('dailyReward', { amount: formatPoints(Number(values.dailyReward || 0)) }) : values.reward ? (mode === 'Solo' ? t('soloReward', { amount: formatPoints(Number(values.reward)) }) : t('multiReward')) : '';
             raw.push('mode', 'difficulty', 'stake', 'reward');
         } else if (key === 'error') {
             values.message = t(values.message || 'unknownError');

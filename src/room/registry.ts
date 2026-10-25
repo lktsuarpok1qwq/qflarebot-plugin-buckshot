@@ -17,6 +17,7 @@ export class BuckshotPlayerRegistry extends StoredObject {
     async dailyChallenge(date: string, userId: string) {
         identifier(userId);
         requireRule(/^\d{4}-\d{2}-\d{2}$/.test(date), '每日挑战参数无效');
+        requireRule(this.read<string>('challenge-used') !== date, '今日挑战已使用，请明天再来');
         const secret = this.ctx.storage.transactionSync(() => {
             const saved = this.read<number[]>('challenge-secret');
 
@@ -35,10 +36,12 @@ export class BuckshotPlayerRegistry extends StoredObject {
 
     statistics() { return this.history.statistics(); }
 
-    claim(input: { botId: string; userId: string; gameId: string; groupId: string; claimId?: string }, eventName?: string): AdmissionName {
+    claim(input: { botId: string; userId: string; gameId: string; groupId: string; claimId?: string; challengeDate?: string }, eventName?: string): AdmissionName {
         Object.values(input).forEach(identifier);
 
         return this.ctx.storage.transactionSync(() => {
+            if (input.challengeDate) { requireRule(this.read<string>('challenge-used') !== input.challengeDate, '今日挑战已使用，请明天再来'); }
+
             const old = this.read<typeof input>('owner');
             requireRule(!old || JSON.stringify(old) === JSON.stringify(input), '你已在其他房间或等待安全关闭');
 
@@ -99,13 +102,15 @@ export class BuckshotPlayerRegistry extends StoredObject {
         });
     }
 
-    owner() { return this.read<{ botId: string; userId: string; gameId: string; groupId: string; claimId?: string }>('owner') ?? null; }
+    owner() { return this.read<{ botId: string; userId: string; gameId: string; groupId: string; claimId?: string; challengeDate?: string }>('owner') ?? null; }
 
-    release(gameId: string, claimId?: string, replay?: PlayerReplay): void {
+    release(gameId: string, claimId?: string, replay?: PlayerReplay, started = false): void {
         this.ctx.storage.transactionSync(() => {
             const owner = this.owner();
 
             if (owner?.gameId === gameId && (!claimId || owner.claimId === claimId)) {
+                if (owner.challengeDate && started) { this.write('challenge-used', owner.challengeDate); }
+
                 if (replay) { this.history.record(gameId, replay); }
 
                 this.ctx.storage.sql.exec('DELETE FROM state WHERE id=?', 'owner');

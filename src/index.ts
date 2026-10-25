@@ -1,6 +1,6 @@
 import { scopeFor } from './conversation.js';
 import { DEFAULT_CONFIGURATION } from './templates/reply-config.js';
-import { deliver, renderMessage } from './templates/send.js';
+import { bindPreviousNavigation, deliver, renderMessage } from './templates/send.js';
 import { ERROR_KEYS } from './templates/replies.js';
 import type { ReplyConfiguration } from './templates/reply-config.js';
 import { definePlugin } from '@qqbot/sdk';
@@ -51,6 +51,8 @@ export default definePlugin({
                 }
 
                 message = await interact(ctx, session, input, templates, requestConfig);
+
+                if (input.setup) { bindPreviousNavigation(message, input.navigation); }
             } catch (error) { message = failure(error, templates); }
 
             await deliver(ctx, session, message, requestConfig);

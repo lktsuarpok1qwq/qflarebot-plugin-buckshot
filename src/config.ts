@@ -3,12 +3,12 @@ import { requireRule } from './game/types.js';
 export interface Config {
     freeEnabled: boolean; stakesEnabled: boolean; showAIStyle: boolean;
     turnSeconds: number; recallSeconds: number; aiReadSeconds: number; aiDelaySeconds: number; aiBudgetMs: number;
-    minStake: number; maxStake: number; rewardLimit: number; multipliers: number[];
+    dailyReward: number; minStake: number; maxStake: number; rewardLimit: number; multipliers: number[];
 }
 export interface ConfigSnapshot { values: Config; globalVersion: number; ruleVersion: 1 }
 export const DEFAULTS: Config = {
     freeEnabled: true, stakesEnabled: false, showAIStyle: false, turnSeconds: 60, recallSeconds: 10, aiReadSeconds: 5, aiDelaySeconds: 2,
-    aiBudgetMs: 4, minStake: 1, maxStake: 10000, rewardLimit: 100000,
+    aiBudgetMs: 4, dailyReward: 0, minStake: 1, maxStake: 10000, rewardLimit: 100000,
     multipliers: [1100, 1300, 1600, 2000, 3000]
 };
 
@@ -20,7 +20,7 @@ export function validateConfig(input: unknown): Config {
 
     for (const key of ['freeEnabled', 'stakesEnabled', 'showAIStyle'] as const) { requireRule(typeof full[key] === 'boolean', '开关格式错误'); }
 
-    for (const [key, min, max] of [['turnSeconds', 20, 300], ['recallSeconds', 1, 20], ['aiReadSeconds', 0, 10], ['aiDelaySeconds', 1, 3], ['aiBudgetMs', 1, 8], ['minStake', 1, 1e12], ['maxStake', 1, 1e12], ['rewardLimit', 0, 1e12]] as const) {
+    for (const [key, min, max] of [['turnSeconds', 20, 300], ['recallSeconds', 1, 20], ['aiReadSeconds', 0, 10], ['aiDelaySeconds', 1, 3], ['aiBudgetMs', 1, 8], ['dailyReward', 0, 1e12], ['minStake', 1, 1e12], ['maxStake', 1, 1e12], ['rewardLimit', 0, 1e12]] as const) {
         requireRule(Number.isSafeInteger(full[key]) && full[key] >= min && full[key] <= max, `${key} 超出范围`);
     }
 

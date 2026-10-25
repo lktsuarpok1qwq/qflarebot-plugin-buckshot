@@ -13,7 +13,7 @@ export interface Task {
     panelOrder?: string; keep?: boolean; error?: string; announcementSentAt?: number; sentAt?: number; expiresAt?: number; plain?: boolean; snapshot?: ReturnType<typeof import('./state.js').view>;
 }
 export interface MoneyTask {
-    id: string; kind: 'reserve' | 'settle' | 'release' | 'renew'; input: Parameters<PointsService['reserveBundle']>[0] | Parameters<PointsService['settle']>[0] | Parameters<PointsService['release']>[0] | Parameters<PointsService['renewReservation']>[0];
+    id: string; kind: 'reserve' | 'settle' | 'release' | 'renew' | 'credit'; input: Parameters<PointsService['credit']>[0] | Parameters<PointsService['reserveBundle']>[0] | Parameters<PointsService['settle']>[0] | Parameters<PointsService['release']>[0] | Parameters<PointsService['renewReservation']>[0];
     retryAt?: number; retries?: number; state: 'PENDING' | 'SENDING' | 'DONE' | 'UNKNOWN' | 'FAILED'; lease?: string; leaseUntil?: number; error?: string; evidence?: string; resolution?: 'committed' | 'inactive' | 'rejected';
 }
 export interface RoomState {

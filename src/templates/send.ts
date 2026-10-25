@@ -3,18 +3,26 @@ import { button, keyboard, type OutgoingMessage, type PluginContext, type Sessio
 import type { BuckshotRoom } from '../room/durable.js';
 import type { PanelReference } from '../room/model.js';
 import { DEFAULTS } from '../config.js';
-import { readRequestConfig, type RequestConfig } from '../integration/database.js';
+import { ensureDatabase, readRequestConfig, type RequestConfig } from '../integration/database.js';
 import type { ReplyConfiguration } from './reply-config.js';
 import { createReplyPresentation, preparePresentation, replyPresentation, type MessageInput } from './presentation.js';
 import { renderTemplate } from './replies.js';
 
-const persistent = new WeakSet<object>();
+const transient = new WeakSet<object>();
+const navigation = new WeakMap<object, string>();
+const previousNavigation = new WeakMap<object, string>();
+const replyKeys = new WeakMap<object, string>();
+
+export function bindPreviousNavigation(message: OutgoingMessage | void, id: unknown): void {
+    if (message && typeof message === 'object' && typeof id === 'string' && /^[a-f0-9-]{36}$/.test(id) && !['error', 'setupBlocked'].includes(replyKeys.get(message) ?? '')) { previousNavigation.set(message, id); }
+}
+
 const panels = new WeakMap<object, PanelReference>();
 const recallDelays = new WeakMap<object, number>();
 
 export function panelReference(message: OutgoingMessage): PanelReference | undefined { return typeof message === 'object' && message !== null ? panels.get(message) : undefined; }
 
-export function keepMessage(message: OutgoingMessage): boolean { return typeof message === 'object' && message !== null && persistent.has(message); }
+export function keepMessage(message: OutgoingMessage): boolean { return typeof message !== 'object' || message === null || !transient.has(message); }
 
 const plainPresentation = createReplyPresentation(renderTemplate, value => value);
 
@@ -30,12 +38,13 @@ export function renderMessage(config: ReplyConfiguration, key: string, input: Me
 
     if (result.buttons.length > 5 || result.buttons.some(row => row.length > 5 || row.some(b => [...b.label].length > 10))) { throw Error('消息按钮超出上限'); }
 
+    const navigationId = ['lobby', 'setupMode', 'setupDifficulty'].includes(key) ? crypto.randomUUID() : undefined;
     const commands: Record<string, string> = { daily: '/恶魔轮盘 挑战', help: '/恶魔轮盘 帮助', status: '/恶魔轮盘 状态', solo: '/恶魔轮盘 新建 单人', duo: '/恶魔轮盘 新建 双人', multi: '/恶魔轮盘 新建 多人' };
     const rows = result.buttons.map(row => row.map(b => {
         const data = b.data ?? commands[b.action];
 
-        if (['solo', 'duo', 'multi'].includes(b.action) || b.action.startsWith('draft') && b.action !== 'draftAmount') {
-            return button.callback(b.label, JSON.stringify({ setup: data.trim().split(/\s+/).slice(1) }), { id: 'buckshot' });
+        if (['solo', 'duo', 'multi'].includes(b.action) || b.action === 'daily' && navigationId || b.action.startsWith('draft') && b.action !== 'draftAmount') {
+            return button.callback(b.label, JSON.stringify({ setup: data.trim().split(/\s+/).slice(1), ...(navigationId ? { navigation: navigationId } : {}) }), { id: 'buckshot' });
         }
 
         return b.action === 'link' ? button.link(b.label, data!) : b.action === 'command' || b.action === 'draftAmount' || commands[b.action] ? button.command(b.label, data!, { enter: b.enter }) : button.callback(b.label, data!, { id: 'buckshot' });
@@ -47,11 +56,15 @@ export function renderMessage(config: ReplyConfiguration, key: string, input: Me
 
     if (input.room?.recallSeconds !== undefined) { recallDelays.set(outgoing, input.room.recallSeconds); }
 
-    if ((key === 'menu' && rows.length > 0) || ['lobby', 'create', 'quit'].includes(key) || key.startsWith('setup') || key === 'panel' && input.room?.status === 'WAITING') { persistent.add(outgoing); }
+    replyKeys.set(outgoing, key);
+
+    if (navigationId) { navigation.set(outgoing, navigationId); }
+
+    if (['load', 'intel', 'noIntel', 'reminder', 'eliminate', 'timeoutEliminate'].includes(key) || key === 'menu' && input.reason || input.parts?.length && !input.parts.some(p => ['finish', 'noWinner', 'dailyRewardPaid'].includes(p.key))) { transient.add(outgoing); }
 
     if (input.room && (key === 'panel' || key === 'menu' && !input.reason)) {
         panels.set(outgoing, { gameId: input.room.gameId, version: input.room.version, status: input.room.status, order: String(Date.now()).padStart(16, '0') + ':' + crypto.randomUUID() });
-        persistent.add(outgoing);
+        transient.delete(outgoing);
     }
 
     return outgoing;
@@ -84,6 +97,26 @@ export async function deliver(ctx: PluginContext, session: Session, message: Out
     if (!['group', 'c2c'].includes(session.scene) || !result.ok || !result.messageId) { return; }
 
     const scope = scopeFor(session);
+    const nav = typeof message === 'object' ? navigation.get(message) : undefined;
+    const previous = typeof message === 'object' ? previousNavigation.get(message) : undefined;
+
+    if (nav || previous) {
+        try {
+            await ensureDatabase(ctx);
+
+            if (nav) { await ctx.db.run('INSERT INTO {coord_ops}(bot,id,game_id,request,state,expires_at) VALUES(?,?,?,?,?,?)', ctx.botId, 'nav:' + nav, 'navigation', JSON.stringify({ scope, messageId: result.messageId }), 'NAVIGATION', Date.now() + 600000); }
+
+            if (previous) {
+                const old = await ctx.db.first<{ request: string }>("DELETE FROM {coord_ops} WHERE bot=? AND game_id=? AND id=? AND state=? AND json_extract(request,'$.scope')=? RETURNING request", ctx.botId, 'navigation', 'nav:' + previous, 'NAVIGATION', scope);
+
+                if (old) {
+                    const receipt = JSON.parse(old.request) as { messageId: string };
+                    const seconds = (await readRequestConfig(ctx, request)).values.recallSeconds;
+                    recallLater(ctx, scope, receipt.messageId, {}, seconds);
+                }
+            }
+        } catch { ctx.logger.warn('选择页清理记录未确认', { code: 'NAVIGATION_RECEIPT_UNKNOWN' }); }
+    }
 
     const panel = panelReference(message);
     let seconds = typeof message === 'object' ? recallDelays.get(message) : undefined;

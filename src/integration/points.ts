@@ -21,6 +21,16 @@ export async function preflight(ctx: PluginContext, users: string[], stake: numb
     }
 }
 
+export async function preflightChallenge(ctx: PluginContext, userId: string, amount: number): Promise<void> {
+    if (!amount) { return; }
+
+    const service = ctx.service<PointsService>('points.wallet');
+    const policy = await service.getSourcePolicy({ source: 'buckshot' });
+    requireRule(policy.ok && policy.data.registered && policy.data.enabled && policy.data.operationPermissions.includes('credit'), '每日挑战奖励未获 Points 发放授权');
+    const account = await service.checkAccounts({ source: 'buckshot', userIds: [userId] });
+    requireRule(account.ok && account.data.accounts.length === 1 && account.data.accounts[0].userId === userId && account.data.accounts[0].exists, '请先开通积分账户再参加有奖挑战');
+}
+
 async function execute(service: PointsService, task: MoneyTask, state: Pick<RoomState, 'gameId' | 'stake' | 'mode'>): Promise<Result<OperationReceipt>> {
     if (task.kind === 'reserve') {
         const input = task.input as Parameters<PointsService['reserveBundle']>[0];
@@ -34,6 +44,8 @@ async function execute(service: PointsService, task: MoneyTask, state: Pick<Room
         return service.reserveBundle(input);
     }
 
+    if (task.kind === 'credit') { return service.credit(task.input as Parameters<PointsService['credit']>[0]); }
+
     if (task.kind === 'settle') { return service.settle(task.input as Parameters<PointsService['settle']>[0]); }
 
     if (task.kind === 'release') { return service.release(task.input as Parameters<PointsService['release']>[0]); }
@@ -42,8 +54,6 @@ async function execute(service: PointsService, task: MoneyTask, state: Pick<Room
 }
 
 export async function processMoney(ctx: PluginContext, room: DurableObjectStub<BuckshotRoom>, state: Pick<RoomState, 'gameId' | 'stake' | 'mode'>): Promise<void> {
-    if (!state.stake) { return; }
-
     const task = await room.claimMoney(state.gameId);
 
     if (!task) { return; }
@@ -58,7 +68,7 @@ export async function processMoney(ctx: PluginContext, room: DurableObjectStub<B
         if (lookup.ok && lookup.data.status === 'COMMITTED' && lookup.data.receipt.operationId === task.id) { outcome = 'DONE'; } else if (lookup.ok && lookup.data.status === 'REJECTED') { outcome = 'FAILED'; } else if (lookup.ok && lookup.data.status === 'NOT_FOUND') {
             let alreadyReturned = false;
 
-            if (task.kind !== 'reserve') {
+            if (task.kind !== 'reserve' && task.kind !== 'credit') {
                 const ids = task.kind === 'settle' ? (task.input as Parameters<PointsService['settle']>[0]).funds.map(f => f.reservationId) : [(task.input as { reservationId: string }).reservationId];
                 const snapshot = await service.getReservations({ source: 'buckshot', reservationIds: ids });
                 requireRule(snapshot.ok && snapshot.data.funds.length === ids.length && snapshot.data.funds.every(f => ids.includes(f.reservationId) && f.record?.referenceId === `buckshot:${state.gameId}` && f.record.amountMinor === state.stake), '预留状态无法确认');

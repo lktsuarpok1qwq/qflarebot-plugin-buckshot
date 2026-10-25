@@ -6,10 +6,16 @@ export const DEFAULT_REPLIES: Replies = {
     "menuStealStage": "{{item}} · 选择要偷的道具",
 
     "dailyLabel": "📅 每日挑战 · {{date}}",
-    "dailyHint": "同日可反复练习；相同难度和操作可复现。跨日请重新确认",
+    "dailyReward": "🏆 获胜奖励：{{amount}} 积分",
+    "dailyRewardPaid": "🏆 每日挑战奖励 {{amount}} 积分已到账\n房间 {{gameId}}",
+    "dailyUsed": "📅 今日挑战已使用，请明天再来",
+    "dailyFixed": "📅 每日挑战难度由当天种子固定，不能选择",
+    "dailyPermission": "🪙 每日挑战奖励未获 Points 发放授权，请联系管理员",
+    "dailyAccount": "🪙 请先开通积分账户再参加有奖挑战",
+    "dailyHint": "每天只能挑战一次，难度固定；开局后认输、超时或失败也计次",
     "dealerStyle": "🎭 庄家 · {{style}}",
     "personalitybalanced": "沉稳", "personalityaggressive": "强攻", "personalitycautious": "谨慎", "personalitytricky": "诡计",
-    "challengeInvalid": "每日挑战只支持免费单人；发送 /恶魔轮盘 挑战 选择难度",
+    "challengeInvalid": "每日挑战只支持免费单人，难度不可选择；发送 /恶魔轮盘 挑战",
     "challengeExpired": "北京时间已跨日，请重新发送 /恶魔轮盘 挑战",
 
     "matchStatistics": "📊 赛后统计\n🔫 开枪 {{shots}} 发：实弹 {{live}}、空弹 {{blank}}\n🍺 退弹 {{ejected}} 发 · 🔄 装填 {{loads}} 次\n🧰 道具操作 {{items}} 次 · ⏱️ 对局 {{seconds}} 秒（含阅读和暂停）",
@@ -28,7 +34,7 @@ export const DEFAULT_REPLIES: Replies = {
     "sceneUnsupported": "仅支持群聊和私聊",
     "privateIdentity": "私聊身份不符",
     "sceneInvalid": "会话标识无效",
-    "help": "🎲 恶魔轮盘\n引导创建：/恶魔轮盘 新建 {{modes}}\n直接创建：/恶魔轮盘 创建 {{modes}} 免费|下注金额 新手|普通|困难|专家|恶魔\n每日挑战：/恶魔轮盘 挑战 [难度]\n状态：/恶魔轮盘 状态\n历史：/恶魔轮盘 历史\n战绩：/恶魔轮盘 战绩\n操作：/恶魔轮盘 操作 房间ID 版本 {{roomCommands}}\n射击：/恶魔轮盘 操作 房间ID 版本 射击 玩家序号\n道具：/恶魔轮盘 操作 房间ID 版本 道具 槽位 [目标序号] [被偷槽位] [被偷道具目标序号]\n槽位从 1 开始；认输需再次确认。🔒 情报只私聊操作者",
+    "help": "🎲 恶魔轮盘\n点击下方按钮填入指令，发送后使用\n对局中通过面板按钮操作\n历史和战绩仅支持私聊查询",
     "setupMode": "🎲 {{mode}} · 创建对局\n\n选择对局方式\n🆓 免费：不使用积分\n🪙 积分：填写下注金额后确认",
     "setupAmount": "🎲 {{mode}} · 积分对局\n\n🪙 每人下注 {{min}}～{{max}} 积分，最多支持小数点后 2 位\n\n点击「✏️ 输入金额」，在命令末尾填写金额后发送\n也可发送：{{command}}\n\n此步骤不会扣除或冻结积分",
     "setupDifficulty": "🎲 {{mode}} · 选择难度\n{{stake}}\n\n只选难度，庄家性格随机且整局固定",
@@ -54,7 +60,7 @@ export const DEFAULT_REPLIES: Replies = {
     "historyNext": "下一页：/恶魔轮盘 历史 {{cursor}}",
     "lobby": "🎲 恶魔轮盘 · 入席，扣动命运\n选择玩法开始对局，或发送 /恶魔轮盘 帮助",
     "create": "🎲 {{mode}} · {{difficulty}}\n{{stake}}\n{{reward}}\n⏳ 确认有效期 10 分钟，尚未创建或扣除积分\n确认后锁定房间参数\n文字确认：/恶魔轮盘 确认创建 {{gameId}}",
-    "quit": "🏳️ 确认认输？淘汰后仍按本局最终结果结算\n文字确认：/恶魔轮盘 操作 {{gameId}} {{version}} 确认退出",
+    "quit": "🏳️ 确认认输？淘汰后仍按本局最终结果结算",
     "panel": "🎲 恶魔轮盘 · {{status}}{{paused}}{{recovery}}\n房间 {{gameId}}\n{{stake}}\n\n{{timer}}\n\n{{items}}\n\n{{turn}}",
     "fallbackPlayer": "玩家{{number}}",
     "humanName": "👤 {{name}}",
@@ -241,6 +247,10 @@ export const DEFAULT_REPLIES: Replies = {
 
 // 业务错误与展示文案的映射；不要改变左侧错误标识。
 export const ERROR_KEYS: Record<string, string> = {
+    "今日挑战已使用，请明天再来": "dailyUsed",
+    "每日挑战难度由当天种子固定，不能选择": "dailyFixed",
+    "每日挑战奖励未获 Points 发放授权": "dailyPermission",
+    "请先开通积分账户再参加有奖挑战": "dailyAccount",
     "每日挑战参数无效": "challengeInvalid",
     "挑战日期已更新，请重新选择": "challengeExpired",
 

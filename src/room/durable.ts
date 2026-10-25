@@ -1,3 +1,5 @@
+import { moneyReason } from './money-reason.js';
+import { formatPoints } from '../amounts.js';
 import { validateChallenge } from '../game/random.js';
 import { RoomIndex, type IndexSnapshot } from './index.js';
 import { captureStatistics, freshCounters, statisticsFact } from '../statistics/model.js';
@@ -12,7 +14,7 @@ import { requireRule } from '../game/types.js';
 import { legalActions } from '../game/engine.js';
 import type { CreateInput, MoneyTask, PanelReceipt, Request, RoomState, Task } from './model.js';
 import { localWake, workDue, canClose } from './schedule.js';
-import { blockClock, cancelGame, clock, mutate, playerName, startGame, tick, view } from './state.js';
+import { blockClock, cancelGame, clock, mutate, playerName, enqueue, startGame, tick, view } from './state.js';
 import { cleanName } from './names.js';
 import { StoredObject } from './storage.js';
 import { prepareDelivery } from './outbox.js';
@@ -530,7 +532,7 @@ export class BuckshotRoom extends StoredObject {
         const result = await this.change(() => {
             const s = this.state(gameId);
 
-            if (!s.stake) { return null; }
+            if (!s.money.length && !s.stake) { return null; }
 
             const now = Date.now();
             this.tick(s, now);
@@ -547,7 +549,7 @@ export class BuckshotRoom extends StoredObject {
                     s.members.forEach((_, i) => s.money.push({
                         id: `${s.gameId}:renew:${s.renewal}:${i}`, kind: 'renew', state: 'PENDING', input: {
                             source: 'buckshot', operationId: `${s.gameId}:renew:${s.renewal}:${i}`, reservationId: `${s.gameId}:r:${i}`, expiresAtMs,
-                            reason: `恶魔轮盘：延长本金冻结期限，不重复扣款；房间 ${s.gameId}`
+                            reason: moneyReason(s, 'renew')
                         }
                     }));
                 }
@@ -599,6 +601,11 @@ export class BuckshotRoom extends StoredObject {
             requireRule(outcome !== 'DONE' || evidence, '缺少资金核对依据');
 
             if (outcome === 'DONE') {
+                if (t.kind === 'credit') {
+                    requireRule(resolution === 'committed', '挑战奖励缺少到账依据');
+                    enqueue(s, '', true).parts = [{ key: 'dailyRewardPaid', values: { amount: formatPoints((t.input as { amountMinor: number }).amountMinor), gameId: s.gameId } }];
+                }
+
                 if (t.kind === 'reserve') {
                     s.reserved = true;
 
@@ -626,7 +633,7 @@ export class BuckshotRoom extends StoredObject {
     async markReleased(gameId: string, userIds: string[]): Promise<void> {
         await this.change(() => {
             const s = this.state(gameId);
-            requireRule(['FINISHED', 'SETTLED', 'CANCELLED'].includes(s.status) && (!s.stake || s.money.every(t => t.state === 'DONE' || t.kind === 'reserve' && t.state === 'FAILED')), '房间尚未安全结算');
+            requireRule(['FINISHED', 'SETTLED', 'CANCELLED'].includes(s.status) && (s.money.every(t => t.state === 'DONE' || t.kind === 'reserve' && t.state === 'FAILED')), '房间尚未安全结算');
 
             for (const userId of userIds) {
                 requireRule(s.members.some(m => m.id === userId), '玩家不存在');

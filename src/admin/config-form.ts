@@ -2,7 +2,9 @@ import { parseMultiplier } from './multipliers.js';
 import { parsePoints, formatPoints } from '../amounts.js';
 
 export const configForm = 'const parseMultiplier = ' + parseMultiplier.toString() + ';\nconst parsePoints = ' + parsePoints.toString() + ';\nconst formatPoints = ' + formatPoints.toString() + ';\n' + String.raw`
-const fields = [['showAIStyle', '显示庄家性格', 'boolean'], ['freeEnabled', '免费模式', 'boolean'], ['stakesEnabled', '积分下注', 'boolean'], ['turnSeconds', '操作时间（秒）', 'number'], ['recallSeconds', '自动撤回等待（秒，1～20）', 'number'], ['aiReadSeconds', 'AI 先手装填阅读时间（秒，0～10）', 'number'], ['aiDelaySeconds', 'AI 中断恢复延迟（秒）', 'number'], ['aiBudgetMs', 'AI 搜索预算（毫秒）', 'number'], ['minStake', '最小下注（积分，最多 2 位小数）', 'money'], ['maxStake', '最大下注（积分，最多 2 位小数）', 'money'], ['rewardLimit', '奖励上限（积分，最多 2 位小数）', 'money'], ['multipliers', '五档倍率（1～10 倍，最多 3 位小数）', 'multipliers']];
+const fields = [['dailyReward', '每日挑战奖励', 'money'], ['showAIStyle', '显示庄家性格', 'boolean'], ['freeEnabled', '免费模式', 'boolean'], ['stakesEnabled', '积分下注', 'boolean'], ['turnSeconds', '操作时间', 'number'], ['recallSeconds', '撤回等待', 'number'], ['aiReadSeconds', '装填阅读时间', 'number'], ['aiDelaySeconds', 'AI 恢复延迟', 'number'], ['aiBudgetMs', 'AI 搜索预算', 'number'], ['minStake', '最小下注', 'money'], ['maxStake', '最大下注', 'money'], ['rewardLimit', '单局奖励上限', 'money'], ['multipliers', '五档倍率', 'multipliers']];
+const integerLimits = { turnSeconds: [20, 300], recallSeconds: [1, 20], aiReadSeconds: [0, 10], aiDelaySeconds: [1, 3], aiBudgetMs: [1, 8] };
+const hints = { dailyReward: '积分，最多 2 位小数；0 不发奖', turnSeconds: '20～300 秒，整数', recallSeconds: '1～20 秒，整数', aiReadSeconds: '0～10 秒，整数；仅 AI 先手时等待', aiDelaySeconds: '1～3 秒，整数；中断后接手行动', aiBudgetMs: '1～8 毫秒，整数；每日挑战使用固定搜索量', minStake: '积分，最多 2 位小数', maxStake: '积分，最多 2 位小数', rewardLimit: '下注局的奖励上限，最多 2 位小数', multipliers: '1～10 倍，含本金，最多 3 位小数' };
 let configEpoch = 0, configBusy = false, loaded = null, baseline = '', pending = null;
 let savedDraft = null;
 
@@ -13,9 +15,9 @@ function validateValues(value) {
         if (typeof value[key] !== 'boolean') { throw new Error('开关格式无效'); }
     }
 
-    for (const [key, min, max] of [['turnSeconds', 20, 300], ['recallSeconds', 1, 20], ['aiReadSeconds', 0, 10], ['aiDelaySeconds', 1, 3], ['aiBudgetMs', 1, 8], ['minStake', 1, 1e12], ['maxStake', 1, 2.5e11], ['rewardLimit', 0, 1e12]]) {
+    for (const [key, min, max] of [['turnSeconds', 20, 300], ['recallSeconds', 1, 20], ['aiReadSeconds', 0, 10], ['aiDelaySeconds', 1, 3], ['aiBudgetMs', 1, 8], ['dailyReward', 0, 1e12], ['minStake', 1, 1e12], ['maxStake', 1, 2.5e11], ['rewardLimit', 0, 1e12]]) {
         if (!Number.isSafeInteger(value[key]) || value[key] < min || value[key] > max) {
-            const error = new Error(fields.find(field => field[0] === key)[1] + '须为 ' + (['minStake', 'maxStake', 'rewardLimit'].includes(key) ? formatPoints(min) + '～' + formatPoints(max) + '，最多 2 位小数' : min + '～' + max + ' 的整数'));
+            const error = new Error(fields.find(field => field[0] === key)[1] + '须为 ' + (['minStake', 'maxStake', 'rewardLimit', 'dailyReward'].includes(key) ? formatPoints(min) + '～' + formatPoints(max) + '，最多 2 位小数' : min + '～' + max + ' 的整数'));
             error.field = key;
             throw error;
         }
@@ -24,6 +26,62 @@ function validateValues(value) {
     if (value.minStake > value.maxStake) { throw new Error('下注范围无效'); }
 
     if (!Array.isArray(value.multipliers) || value.multipliers.length !== 5 || value.multipliers.some(n => !Number.isSafeInteger(n) || n < 1000 || n > 10000)) { throw new Error('配置响应中的五档倍率无效'); }
+}
+
+function validateForm(focus = false) {
+    let first = null;
+    const setError = (input, message) => {
+        input.setCustomValidity(message);
+        const error = $(input.id + '-error');
+        error.textContent = message;
+        error.hidden = !message;
+
+        if (message) {
+            input.setAttribute('aria-invalid', 'true');
+            first ??= input;
+        } else { input.removeAttribute('aria-invalid'); }
+    };
+
+    for (const [key, , type] of fields) {
+        if (type === 'boolean') { continue; }
+
+        const inputs = type === 'multipliers' ? [...$('cfg-' + key).querySelectorAll('input')] : [$('cfg-' + key)];
+
+        for (const input of inputs) {
+            const raw = input.value.trim();
+            let message = '';
+
+            try {
+                if (!raw || input.validity.badInput) { throw Error('请填写有效数字'); }
+
+                if (type === 'number' && !/^\d+$/.test(raw)) { throw Error('请填写整数，不使用指数或符号'); }
+
+                if (type === 'money') { parsePoints(raw, ['dailyReward', 'rewardLimit'].includes(key)); }
+
+                if (type === 'multipliers') { parseMultiplier(raw); }
+
+                if (!Number.isFinite(Number(raw)) || Number(raw) < Number(input.min) || Number(raw) > Number(input.max)) { throw Error('范围为 ' + input.min + '～' + input.max); }
+            } catch (error) { message = error.message; }
+
+            setError(input, message);
+        }
+    }
+
+    const min = $('cfg-minStake'), max = $('cfg-maxStake');
+
+    if (!min.validationMessage && !max.validationMessage && Number(min.value) > Number(max.value)) { setError(max, '最大下注不能小于最小下注'); }
+
+    $('configErrors').textContent = first ? '请修正标红的输入项' : '';
+
+    if (first && focus) {
+        const section = first.closest('details');
+
+        if (section) { section.open = true; }
+
+        first.focus();
+    }
+
+    return !first;
 }
 
 function canonical(value) { return JSON.stringify(Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)))); }
@@ -45,10 +103,10 @@ function internal(value) {
 
     const amounts = {};
 
-    for (const key of ['minStake', 'maxStake', 'rewardLimit']) {
+    for (const key of ['minStake', 'maxStake', 'rewardLimit', 'dailyReward']) {
         if (!Object.hasOwn(value, key)) { continue; }
 
-        try { amounts[key] = parsePoints(value[key], key === 'rewardLimit'); } catch (error) {
+        try { amounts[key] = parsePoints(value[key], ['rewardLimit', 'dailyReward'].includes(key)); } catch (error) {
             error.field = key;
             throw error;
         }
@@ -69,7 +127,7 @@ function internal(value) {
 function display(value) {
     const result = { ...value };
 
-    for (const key of ['minStake', 'maxStake', 'rewardLimit']) { if (Object.hasOwn(value, key)) { result[key] = formatPoints(value[key]); } }
+    for (const key of ['minStake', 'maxStake', 'rewardLimit', 'dailyReward']) { if (Object.hasOwn(value, key)) { result[key] = formatPoints(value[key]); } }
 
     if (value.multipliers) { result.multipliers = value.multipliers.map(n => String(n / 1000)); }
 
@@ -84,8 +142,8 @@ function dirty() {
 
 function buttons() {
     $('configForm').setAttribute('aria-busy', String(configBusy));
-    const changed = dirty();
-    $('saveConfig').disabled = !changed || configBusy || !!pending;
+    const valid = !loaded || validateForm(), changed = dirty() || !valid;
+    $('saveConfig').disabled = !changed || !valid || configBusy || !!pending;
     $('undoConfig').disabled = !changed || configBusy || !!pending;
     $('configStatus').textContent = pending ? '保存结果未知，请核对或重试原请求' : !loaded ? '尚未加载' : changed ? '有未保存修改' : '统一配置' + ' · 版本 ' + loaded.version;
     $('checkConfig').hidden = !pending;
@@ -111,9 +169,9 @@ function loadForm(result) {
     $('configForm').replaceChildren();
 
     const groups = [
-        ['常用设置', ['freeEnabled', 'showAIStyle', 'turnSeconds', 'aiReadSeconds', 'recallSeconds'], '阅读时间默认 5 秒，0 表示不等待；仅装填后 AI 先手时生效，不占用玩家操作倒计时。装填公告至少保留到阅读结束；最新操作面板保留，旧面板成功替换后按撤回时间清理。'],
-        ['积分与返还', ['stakesEnabled', 'minStake', 'maxStake', 'rewardLimit', 'multipliers'], '金额以积分填写，最多 2 位小数；输入 10 表示 10.00 积分。倍率包含本金，最多 3 位小数。'],
-        ['高级设置', ['aiDelaySeconds', 'aiBudgetMs'], 'AI 中断恢复延迟仅用于后台接手未完成行动，默认 2 秒，可设 1～3 秒；正常请求直接推进。搜索预算默认 4 毫秒，可设 1～8 毫秒；无需调大，复杂局面同时受节点上限约束。每日挑战按固定节点计算。']
+        ['常用设置', ['freeEnabled', 'showAIStyle', 'turnSeconds', 'aiReadSeconds', 'recallSeconds'], '阅读不占玩家倒计时；最新操作面板保留。'],
+        ['积分与返还', ['dailyReward', 'stakesEnabled', 'minStake', 'maxStake', 'rewardLimit', 'multipliers'], '每日挑战每天一次，开局后计次；发奖需 Points 授权及玩家开户。'],
+        ['高级设置', ['aiDelaySeconds', 'aiBudgetMs'], '正常行动即时推进；复杂局面同时受搜索量上限约束。']
     ];
     const sections = new Map();
 
@@ -150,38 +208,60 @@ function loadForm(result) {
                 input.inputMode = 'decimal';
                 input.id = 'cfg-multiplier-' + e.children.length;
                 input.setAttribute('aria-describedby', 'configErrors');
-                input.oninput = () => input.removeAttribute('aria-invalid');
+                input.required = true;
                 input.setAttribute('aria-label', difficulty + '倍率');
                 const label = document.createElement('label');
                 label.textContent = difficulty;
                 label.append(input);
+                const error = document.createElement('small');
+                error.id = input.id + '-error';
+                error.className = 'danger field-error';
+                error.hidden = true;
+                input.setAttribute('aria-describedby', 'cfg-multipliers-hint ' + error.id);
+                label.append(error);
                 e.append(label);
             }
         } else { e.type = type === 'boolean' ? 'checkbox' : 'number'; }
 
         if (type === 'money') {
-            e.min = key === 'rewardLimit' ? '0' : '0.01';
+            e.min = ['rewardLimit', 'dailyReward'].includes(key) ? '0' : '0.01';
             e.max = key === 'maxStake' ? '2500000000' : '10000000000';
             e.step = '0.01';
             e.inputMode = 'decimal';
         }
 
-        if (key === 'recallSeconds' || key === 'aiReadSeconds') {
-            e.min = key === 'aiReadSeconds' ? '0' : '1';
-            e.max = key === 'aiReadSeconds' ? '10' : '20';
+        if (type === 'number') {
+            [e.min, e.max] = integerLimits[key].map(String);
             e.step = '1';
+            e.inputMode = 'numeric';
         }
 
-        e.setAttribute('aria-describedby', 'configErrors');
-        e.oninput = () => {
-            $('configErrors').textContent = '';
-            e.removeAttribute('aria-invalid');
-            buttons();
-        };
+        if (type === 'number' || type === 'money') { e.required = true; }
+
+        e.oninput = () => buttons();
+        e.addEventListener('focusout', () => buttons());
         const controls = document.createElement('div');
         controls.className = 'config-controls';
 
         controls.append(e);
+
+        if (hints[key]) {
+            const hint = document.createElement('small');
+            hint.id = e.id + '-hint';
+            hint.className = 'hint field-hint';
+            hint.textContent = hints[key];
+            name.append(hint);
+        }
+
+        if (type === 'money' || type === 'number') {
+            const error = document.createElement('small');
+            error.id = e.id + '-error';
+            error.className = 'danger field-error';
+            error.hidden = true;
+            e.setAttribute('aria-describedby', e.id + '-hint ' + error.id);
+            controls.append(error);
+        }
+
         row.append(name, controls);
         sections.get(key).append(row);
     }
@@ -230,6 +310,10 @@ $('loadConfig').onclick = async () => {
 };
 $('undoConfig').onclick = () => {
     fill(JSON.parse(baseline));
+    $('configErrors').textContent = '';
+
+    for (const input of $('configForm').querySelectorAll('[aria-invalid]')) { input.removeAttribute('aria-invalid'); }
+
     buttons();
 };
 
@@ -251,7 +335,11 @@ function acceptConfig(result, operation) {
 }
 
 async function save() {
-    if (configBusy || pending || !loaded || !dirty()) { return; }
+    if (configBusy || pending || !loaded) { return; }
+
+    if (!validateForm(true)) { return; }
+
+    if (!dirty()) { return; }
 
     const value = draft();
 
@@ -295,6 +383,10 @@ async function save() {
     }
 }
 
+$('configForm').onsubmit = event => {
+    event.preventDefault();
+    save();
+};
 $('saveConfig').onclick = save;
 $('checkConfig').onclick = async () => {
     if (configBusy || !pending) { return; }

@@ -2,7 +2,7 @@ import type { RoomState } from './model.js';
 
 export function canClose(s: RoomState): boolean {
     return ['FINISHED', 'SETTLED', 'CANCELLED'].includes(s.status) && !s.outbox.some(t => t.critical && t.state !== 'SENT')
-        && (!s.stake || s.money.every(t => t.state === 'DONE' || t.kind === 'reserve' && t.state === 'FAILED'));
+        && (s.money.every(t => t.state === 'DONE' || t.kind === 'reserve' && t.state === 'FAILED'));
 }
 
 export function localWake(s: RoomState): number | null {
