@@ -217,7 +217,7 @@ export function cancelGame(s: RoomState, now: number): void {
 
 export function mutate(s: RoomState, request: Request, admin: boolean, now: number): void {
     const a = request.action, id = request.actor;
-    requireRule(a && ['addAI', 'removeAI', 'join', 'leave', 'ready', 'start', 'confirmQuit', 'quit', 'play', 'pause', 'resume', 'cancel', 'retry', 'removed', 'abort', 'reconcile'].includes(a.type), '操作类型无效');
+    requireRule(a && ['addAI', 'removeAI', 'join', 'leave', 'ready', 'start', 'confirmClose', 'close', 'confirmQuit', 'quit', 'play', 'pause', 'resume', 'cancel', 'retry', 'removed', 'abort', 'reconcile'].includes(a.type), '操作类型无效');
 
     if (['pause', 'resume', 'cancel', 'retry', 'removed', 'abort', 'reconcile'].includes(a.type)) { requireRule(admin, '仅管理入口允许此操作'); } else { requireRule(!s.paused && !s.recovery, '房间已暂停或等待恢复'); }
 
@@ -271,6 +271,17 @@ export function mutate(s: RoomState, request: Request, admin: boolean, now: numb
         requireRule(!s.opponents?.length || s.mode === 'multi' && s.stake === 0, '人机仅支持多人免费房间');
 
         if (s.stake) { reserve(s, now); } else { startGame(s, now); }
+    } else if (a.type === 'confirmClose' || a.type === 'close') {
+        requireRule(s.status === 'WAITING' && member && s.host === id, '仅等待中的房主可以关闭房间');
+
+        if (a.type === 'confirmClose') {
+            s.closeConfirmation = { actor: id, version: s.version + 1, expires: now + 30000 };
+        } else {
+            requireRule(s.closeConfirmation?.actor === id && s.closeConfirmation.version === s.version && s.closeConfirmation.expires > now, '请重新确认关闭房间');
+            requireRule(!s.reserved && s.money.length === 0, '资金状态待核对，暂不能关闭');
+            cancelGame(s, now);
+            delete s.closeConfirmation;
+        }
     } else if (a.type === 'confirmQuit') {
         requireRule(member && s.status === 'PLAYING', '当前不能认输');
         s.confirmations[id] = { version: s.version + 1, expires: now + 30000 };
@@ -419,7 +430,7 @@ export function pendingTasks(s: RoomState) {
 
 export function view(s: RoomState) {
     return {
-        ...(s.challenge ? { challengeDate: s.challenge.date } : {}), ...(s.aiPersonality ? { aiPersonality: s.aiPersonality } : {}),
+        ...(s.challenge ? { challengeDate: s.challenge.date, dailyReward: s.config.values.dailyReward } : {}), ...(s.aiPersonality ? { aiPersonality: s.aiPersonality } : {}),
         gameId: s.gameId, groupId: s.groupId, version: s.version, status: s.status, mode: s.mode, stake: s.stake, difficulty: s.difficulty,
         opponents: (s.opponents ?? []).map(({ id, name, difficulty, personality }) => ({ id, name, difficulty, ...(s.config.values.showAIStyle ? { personality } : {}) })),
         showAIStyle: s.config.values.showAIStyle === true, recallSeconds: s.config.values.recallSeconds, host: s.host, members: s.members.map(({ id, name, ready, claimId, nameLookupAt }) => ({ id, name, ready, ...(claimId !== undefined ? { claimId } : {}), ...(nameLookupAt !== undefined ? { nameLookupAt } : {}) })), paused: s.paused, recovery: s.recovery,

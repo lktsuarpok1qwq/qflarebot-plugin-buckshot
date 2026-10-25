@@ -1,15 +1,16 @@
+import { replayTimelineScript, replayTimelineStyle } from './timeline.js';
 import { replayFileScript } from './file.js';
 import { replayImportMarkup, replayToolsScript } from './tools.js';
 import { replayScenesMarkup, replayScenesScript, replayScenesStyle } from './scenes.js';
 import { replayRender } from './render.js';
 import { replayInsightsMarkup, replayInsightsScript, replayInsightsStyle } from './insights.js';
 
-export const replayStyle = replayInsightsStyle + replayScenesStyle + String.raw`
-.replay-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}.replay-heading p{margin:0;min-width:0}.replay-heading button{flex-shrink:0}#replayDrop{padding:12px 16px}#replayDrop .actions{margin:0}#replayDrop .hint{margin:8px 0 0}.replay-file-help{display:none}#replayDrop.expanded .replay-file-help{display:block}@media(max-width:600px){.replay-heading{flex-wrap:wrap}.replay-heading button{margin-left:auto}}#replayShareFallback{width:100%;min-width:0}#replayDrop[aria-busy=true]{opacity:.7}.replay-round{display:inline-flex;flex-direction:column;align-items:center;gap:4px;border:2px solid var(--qb-border);border-radius:var(--qb-radius);padding:10px;margin:4px;min-width:68px}.replay-round.used{opacity:.5}.replay-round.current{border-color:var(--qb-on-primary)}.replay-round b{font-size:24px}.replay-grid{display:grid;grid-template-columns:220px minmax(0,1fr);gap:16px}.replay-grid>*{min-width:0}#replayTimeline{width:100%;height:420px}.replay-message{background:var(--qb-surface-muted);padding:14px;border-radius:var(--qb-radius);margin:12px 0;overflow-wrap:anywhere}.replay-message pre{max-height:520px;margin:8px 0;font:inherit;font-size:14px;line-height:1.6}#replaySelect{max-width:100%;min-width:0;flex:1}#replayProgress{display:block;box-sizing:border-box;width:100%;height:44px;min-height:44px;margin:0;padding:0;border:0;border-radius:0;background:transparent;accent-color:var(--qb-primary);cursor:pointer}#replaySummary{overflow-wrap:anywhere}#replay .actions{flex-wrap:wrap}@media(max-width:600px){.replay-grid{grid-template-columns:1fr}#replayTimeline{height:140px}}
+export const replayStyle = replayInsightsStyle + replayScenesStyle + replayTimelineStyle + String.raw`
+.replay-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}.replay-heading p{margin:0;min-width:0}.replay-heading button{flex-shrink:0}#replayDrop{padding:12px 16px}#replayDrop .actions{margin:0}#replayDrop .hint{margin:8px 0 0}.replay-file-help{display:none}#replayDrop.expanded .replay-file-help{display:block}@media(max-width:600px){.replay-heading{flex-wrap:wrap}.replay-heading button{margin-left:auto}}#replayShareFallback{width:100%;min-width:0}#replayDrop[aria-busy=true]{opacity:.7}.replay-round{display:inline-flex;flex-direction:column;align-items:center;gap:4px;border:2px solid var(--qb-border);border-radius:var(--qb-radius);padding:10px;margin:4px;min-width:68px}.replay-round.used{opacity:.5}.replay-round.current{border-color:var(--qb-on-primary)}.replay-round b{font-size:24px}.replay-grid{display:grid;grid-template-columns:220px minmax(0,1fr);gap:16px}.replay-grid>*{min-width:0}#replayTimeline{width:100%}.replay-message{background:var(--qb-surface-muted);padding:14px;border-radius:var(--qb-radius);margin:12px 0;overflow-wrap:anywhere}.replay-message pre{max-height:520px;margin:8px 0;font:inherit;font-size:14px;line-height:1.6}#replaySelect{max-width:100%;min-width:0;flex:1}#replayProgress{display:block;box-sizing:border-box;width:100%;height:44px;min-height:44px;margin:0;padding:0;border:0;border-radius:0;background:transparent;accent-color:var(--qb-primary);cursor:pointer}#replaySummary{overflow-wrap:anywhere}#replay .actions{flex-wrap:wrap}@media(max-width:600px){.replay-grid{grid-template-columns:1fr}#replayTimeline{height:180px}}
 `;
-export const replayViewerMarkup = String.raw`<div id="replayViewer" class="qb-card" hidden><div class="replay-heading"><p id="replaySummary"></p><button id="retry" hidden>重新加载本局</button></div><!-- BUCKSHOT_REPLAY_SCENES --><!-- BUCKSHOT_REPLAY_INSIGHTS --><div class="actions"><button id="replayPrev">上一步</button><button id="replayPlay">播放</button><button id="replayNext">下一步</button><button id="replayShare" hidden>分享这一步</button><label>每步停留 <select id="replayInterval"><option value="500">0.5 秒</option><option value="1000" selected>1 秒</option><option value="2000">2 秒</option><option value="3000">3 秒</option></select></label></div><p id="replayShareNotice" role="status"></p><input id="replayShareFallback" aria-label="定位链接" readonly hidden><input id="replayProgress" type="range" min="0" max="1" step="1" value="0" aria-label="操作步骤"><p id="replayCount" class="hint"></p><label>视角 <select id="replayView"><option value="all">全部结果</option><option value="public">仅公开信息</option></select></label><div class="replay-grid"><select id="replayTimeline" size="15" aria-label="操作列表"></select><div><article class="replay-message"><h3>弹仓</h3><div id="replayAmmo" aria-label="完整子弹类型"></div><p id="replayAmmoNote" class="hint"></p></article><article class="replay-message"><h3>状态面板</h3><pre id="replayPanel"></pre></article><article class="replay-message"><h3 id="replayAction"></h3><pre id="replayResults"></pre></article></div></div><p class="hint">每步展示操作后的状态和实际结果。回放包含本局完整弹序和情报，视角仅筛选显示。</p></div>
+export const replayViewerMarkup = String.raw`<div id="replayViewer" class="qb-card" hidden><div class="replay-heading"><p id="replaySummary"></p><button id="retry" hidden>重新加载本局</button></div><!-- BUCKSHOT_REPLAY_SCENES --><!-- BUCKSHOT_REPLAY_INSIGHTS --><div class="actions"><button id="replayPrev">上一步</button><button id="replayPlay">播放</button><button id="replayNext">下一步</button><button id="replayShare" hidden>分享这一步</button><label>每步停留 <select id="replayInterval"><option value="500">0.5 秒</option><option value="1000" selected>1 秒</option><option value="2000">2 秒</option><option value="3000">3 秒</option></select></label></div><p id="replayShareNotice" role="status"></p><input id="replayShareFallback" aria-label="定位链接" readonly hidden><input id="replayProgress" type="range" min="0" max="1" step="1" value="0" aria-label="操作步骤"><p id="replayCount" class="hint"></p><label>视角 <select id="replayView"><option value="all">全部结果</option><option value="public">仅公开信息</option></select></label><div class="replay-grid"><nav id="replayTimeline" aria-label="操作步骤"></nav><div><article class="replay-message"><h3>弹仓</h3><div id="replayAmmo" aria-label="完整子弹类型"></div><p id="replayAmmoNote" class="hint"></p></article><article class="replay-message"><h3>状态面板</h3><pre id="replayPanel"></pre></article><article class="replay-message"><h3 id="replayAction"></h3><pre id="replayResults"></pre></article></div></div><p class="hint">每步展示操作后的状态和实际结果。回放包含本局完整弹序和情报，视角仅筛选显示。</p></div>
 `.replace('<!-- BUCKSHOT_REPLAY_INSIGHTS -->', () => replayInsightsMarkup).replace('<!-- BUCKSHOT_REPLAY_SCENES -->', () => replayScenesMarkup);
-export const replayPlayerScript = replayFileScript + replayRender + String.raw`
+export const replayPlayerScript = replayFileScript + replayRender + replayTimelineScript + String.raw`
 let replayEpoch = 0, replayBusy = false, replayData = null, replayPosition = 0, replayTimer = null;
 
 function stopReplay() {
@@ -28,9 +29,9 @@ function checkReplay(data) {
 
     if (typeof data.game.startedAt !== 'string' || !Number.isFinite(Date.parse(data.game.startedAt)) || !['group', 'c2c'].includes(data.game.scene)) { throw Error('回放场次信息无效'); }
 
-    if (data.game.personality !== undefined && !['balanced', 'aggressive', 'cautious', 'tricky'].includes(data.game.personality) || data.game.challengeDate !== undefined && (typeof data.game.challengeDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(data.game.challengeDate))) { throw Error('回放挑战信息无效'); }
+    if (data.game.challengeDate !== undefined && (typeof data.game.challengeDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(data.game.challengeDate))) { throw Error('回放挑战信息无效'); }
 
-    if (data.config?.showAIStyle !== undefined && data.config.showAIStyle !== true) { throw Error('回放展示设置无效'); }
+    if (data.game.dailyRewardMinor !== undefined && (!data.game.challengeDate || !Number.isSafeInteger(data.game.dailyRewardMinor) || data.game.dailyRewardMinor < 0 || data.game.dailyRewardMinor > 1e12)) { throw Error('回放奖励金额无效'); }
 
     const ids = new Set();
 
@@ -39,6 +40,8 @@ function checkReplay(data) {
 
         ids.add(p.id);
     }
+
+    if (data.adminAI !== undefined && (!Array.isArray(data.adminAI) || data.adminAI.length > 4 || data.adminAI.some(p => !Array.isArray(p) || p.length !== 2 || !data.players.some(v => v.id === p[0] && v.ai) || !['balanced', 'aggressive', 'cautious', 'tricky'].includes(p[1])) || new Set(data.adminAI.map(p => p[0])).size !== data.adminAI.length)) { throw Error('AI 记录无效'); }
 
     if (data.game.winner !== undefined && !ids.has(data.game.winner)) { throw Error('回放胜者无效'); }
 
@@ -78,7 +81,7 @@ function loadReplayData(input, sourceKey = null, position = 0) {
     loadReplayScenes();
     const game = data.game;
     $('replaySummary').textContent = replayModes[game.mode] + (game.mode === 'solo' ? ' · ' + ['新手', '普通', '困难', '专家', '恶魔'][game.difficulty] : '') + ' · ' + game.id + ' · ' + (data.integrity.complete ? '记录完整' : '记录不完整：' + data.integrity.reason) + ' · 结果：' + replayInsightResult();
-    $('replayTimeline').replaceChildren(...data.steps.map((step, i) => new Option('第 ' + i + ' 步 · ' + replayActionLabel(step.action, step.actor), String(i))));
+    buildReplayTimeline();
     $('replayViewer').hidden = false;
     renderReplay();
 }
@@ -109,7 +112,7 @@ $('replayProgress').onkeydown = event => {
     if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown'].includes(event.key)) { stopReplay(); }
 };
 $('replayProgress').oninput = () => selectReplay(Number($('replayProgress').value));
-$('replayTimeline').onchange = () => selectReplay(Number($('replayTimeline').value));
+
 $('replayView').onchange = renderReplay;
 $('replayPrev').onclick = () => selectReplay(replayPosition - 1);
 $('replayNext').onclick = () => selectReplay(replayPosition + 1);

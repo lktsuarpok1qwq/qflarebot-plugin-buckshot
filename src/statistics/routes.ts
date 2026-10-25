@@ -17,7 +17,7 @@ export const statisticsRoutes: Route[] = [
         method: 'GET', path: '/api/statistics', auth: 'admin', handler: async ({ ctx, request }) => {
             try {
                 const q = new URL(request.url).searchParams, range = statisticsRange(q.get('from') ?? '', q.get('to') ?? '');
-                const rows = await ctx.db.all(`SELECT day,mode,paid,difficulty,${COUNTS.join(',')},${MONEY.map(k => `CAST(${k} AS TEXT) AS ${k}`).join(',')} FROM {stats_daily} WHERE bot=? AND day>=? AND day<=? ORDER BY day,mode,paid,difficulty`, ctx.botId, range.from, range.to);
+                const rows = await ctx.db.all(`SELECT day,mode,kind,paid,difficulty,${COUNTS.join(',')},${MONEY.map(k => `CAST(${k} AS TEXT) AS ${k}`).join(',')} FROM {stats_daily} WHERE bot=? AND day>=? AND day<=? ORDER BY day,mode,kind,paid,difficulty`, ctx.botId, range.from, range.to);
 
                 return Response.json({ ...range, timezone: 'Asia/Shanghai', rows, observedAt: Date.now(), basis: '安全关闭日；已确认的轮盘原结算，不代表余额，后续纠错以 Points 流水为准' }, { headers: { 'cache-control': 'private,no-store' } });
             } catch (e) { return Response.json({ error: e instanceof Error ? e.message : '统计查询未完成' }, { status: 400 }); }

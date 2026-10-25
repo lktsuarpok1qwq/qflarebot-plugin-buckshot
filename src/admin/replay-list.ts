@@ -8,6 +8,14 @@ export const replayListMarkup = String.raw`
 `;
 export const replayListScript = replayMenuScript + String.raw`
 replayLocalStart = () => { closeReplayMenu(); replayListEpoch++; clearAdminReplay(); };
+replayLocalDone = () => showAdminReplayStyle(replayData);
+
+function showAdminReplayStyle(data) {
+    const styles = data.adminAI ?? [];
+    $('replayAdminStyle').textContent = styles.length ? styles.map(([id, style]) => data.players.find(p => p.id === id).name + '：' + replayText('personality' + style)).join(' · ') : '本局未记录 AI 性格';
+    $('replayAdminDetails').hidden = false;
+}
+
 let replayListEpoch = 0, replayListItems = [], replayListLoaded = false, replayListComplete = true, replayDeleting = false, replayLoadedKey = null, replayRaw = null;
 
 function clearAdminReplay(clearCache = true) {
@@ -219,8 +227,7 @@ async function loadAdminReplay(item) {
         loadReplayData(data, item.key);
         replayRaw = raw;
         replayLoadedKey = item.key;
-        $('replayAdminStyle').textContent = data.game.personality ? '庄家性格：' + replayText('personality' + data.game.personality) : '本局未记录庄家性格';
-        $('replayAdminDetails').hidden = false;
+        showAdminReplayStyle(data);
     } catch (e) { if (own === replayEpoch && active === 'replay') { toast(e.message, 'error'); } } finally {
         replayBusy = false;
         updateReplayControls();

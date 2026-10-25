@@ -1,14 +1,17 @@
+import { overallSummaryScript } from './statistics-summary.js';
+
 export const insightsStyle = String.raw`
 .statistics-insights{margin:24px 0}.statistics-summary{padding-left:20px;margin:8px 0 20px;line-height:1.8}.statistics-plot{width:100%;min-width:0;height:240px;color:var(--qb-fg-muted)}.statistics-plot svg{display:block;width:100%;height:100%;overflow:visible;font:12px var(--qb-font-sans)}.statistics-series-0{color:var(--qb-accent)}.statistics-series-1{color:var(--qb-warning)}.statistics-series-2{color:var(--qb-fg)}.statistics-legend{display:flex;gap:16px;flex-wrap:wrap;margin:12px 0}.statistics-legend span{display:inline-flex;align-items:center;gap:6px}.statistics-legend i{width:18px;border-top:3px solid currentColor}.statistics-legend .statistics-series-1{border-top-style:dashed}.statistics-legend .statistics-series-2{border-top-style:dotted}.statistics-day{display:flex;gap:12px;align-items:center}.statistics-day input{padding:0;min-width:0;flex:1;appearance:none;background:transparent;border:0;min-height:32px}.statistics-day input::-webkit-slider-runnable-track{height:6px;border-radius:var(--qb-radius-full);background:var(--qb-border-strong)}.statistics-day input::-webkit-slider-thumb{appearance:none;width:16px;height:16px;margin-top:-5px;border:2px solid var(--qb-surface);border-radius:50%;background:var(--qb-accent)}.statistics-day input::-moz-range-track{height:6px;border-radius:var(--qb-radius-full);background:var(--qb-border-strong)}.statistics-day input::-moz-range-thumb{width:12px;height:12px;border:2px solid var(--qb-surface);border-radius:50%;background:var(--qb-accent)}.statistics-reading{font-variant-numeric:tabular-nums;overflow-wrap:anywhere;min-height:24px}.statistics-details{margin:16px 0}.statistics-details summary{cursor:pointer;padding:8px 0;font-weight:600}.statistics-details summary:focus-visible{outline:2px solid var(--qb-ring);outline-offset:2px}
 @media(pointer:coarse){.statistics-insights select,.statistics-day input{min-height:44px}}
 `;
 
 export const insightsMarkup = String.raw`
-<div class="statistics-insights"><h2>本次小结</h2><ul id="statisticsSummary" class="statistics-summary"></ul><div class="actions"><label>趋势 <select id="statisticsTrendKind"><option value="games">对局趋势</option><option value="points">积分趋势</option></select></label><label id="statisticsTrendPeriodLabel" hidden>显示 <select id="statisticsTrendPeriod"><option value="daily">每日收支</option><option value="total">累计收支</option></select></label></div><div id="statisticsTrendLegend" class="statistics-legend"></div><div id="statisticsTrendPlot" class="statistics-plot"></div><div class="statistics-day"><label for="statisticsTrendDay">查看日期</label><input id="statisticsTrendDay" type="range" min="0" max="0" value="0"></div><p id="statisticsTrendReading" class="statistics-reading" aria-live="polite"></p></div>
-<div id="statisticsAI" class="statistics-insights"><h2>AI 难度对比</h2><div class="statistics-scroll"><table class="statistics-table"><thead><tr><th>难度</th><th>完成对局</th><th>玩家胜率</th><th>净支出</th></tr></thead><tbody id="statisticsAILevels"></tbody></table></div></div>
+<div class="statistics-insights"><div class="actions"><label>趋势 <select id="statisticsTrendKind"><option value="games">对局趋势</option><option value="points">积分趋势</option></select></label><label id="statisticsTrendPeriodLabel" hidden>显示 <select id="statisticsTrendPeriod"><option value="daily">每日收支</option><option value="total">累计收支</option></select></label></div><div id="statisticsTrendLegend" class="statistics-legend"></div><div id="statisticsTrendPlot" class="statistics-plot"></div><div class="statistics-day"><label for="statisticsTrendDay">查看日期</label><input id="statisticsTrendDay" type="range" min="0" max="0" value="0"></div><p id="statisticsTrendReading" class="statistics-reading" aria-live="polite"></p></div>
+<details id="statisticsChallenge" class="statistics-details"><summary>每日挑战详情</summary><div id="statisticsChallengeTiles" class="statistics-grid"></div><p class="hint">挑战次数含开局后失败、认输、超时和取消；只统计已安全关闭的对局。奖励只计已确认到账。</p></details>
+<details id="statisticsAI" class="statistics-details"><summary>AI 难度对比</summary><p class="hint">普通人机与每日挑战分别统计；多人混合难度不计入。对局少时不要据此判断难度高低。</p><div class="statistics-scroll"><table class="statistics-table"><thead><tr><th>玩法／难度</th><th>开局次数</th><th>获胜次数</th><th>玩家胜率／挑战成功率</th><th>净支出</th></tr></thead><tbody id="statisticsAILevels"></tbody></table></div></details>
 `;
 
-export const insightsScript = String.raw`
+export const insightsScript = overallSummaryScript + String.raw`
 let statisticsTrendData = [], statisticsTrendSelected = 0;
 const statisticsSVG = 'http://www.w3.org/2000/svg';
 
@@ -20,43 +23,12 @@ function statisticsDates() {
     return dates;
 }
 
-function statisticsSummary(rows, total, levels) {
-    const free = sumStatistics(rows.filter(r => !r.paid)), paid = sumStatistics(rows.filter(r => r.paid)), lines = [];
-
-    if (total.games) {
-        lines.push('完成 ' + total.games + ' 局：免费 ' + free.games + ' 局，积分 ' + paid.games + ' 局。');
-        const modes = Object.keys(statisticsModes).map(mode => ({ mode, games: sumStatistics(rows.filter(r => r.mode === mode)).games }));
-        const top = Math.max(...modes.map(m => m.games)), popular = modes.filter(m => m.games === top);
-        lines.push(popular.map(m => statisticsModes[m.mode]).join('、') + (popular.length > 1 ? '并列最多，各 ' : '最多，') + top + ' 局。');
-    } else { lines.push('没有完成对局' + (total.cancelled ? '，取消 ' + total.cancelled + ' 场。' : '。')); }
-
-    const played = levels.filter(t => t.games > t.draws);
-
-    if (played.length > 1) {
-        const lowest = played.reduce((a, b) => BigInt(a.humanWins) * BigInt(b.games - b.draws) <= BigInt(b.humanWins) * BigInt(a.games - a.draws) ? a : b);
-        const ties = played.filter(t => BigInt(t.humanWins) * BigInt(lowest.games - lowest.draws) === BigInt(lowest.humanWins) * BigInt(t.games - t.draws));
-        lines.push('已玩的难度中，' + ties.map(t => statisticsLevels[t.level]).join('、') + '玩家胜率' + (ties.length > 1 ? '并列' : '') + '最低（' + statisticsRate(lowest) + '）。');
-    }
-
-    const net = total.reward - total.burn;
-
-    if (net) { lines.push('已确认积分净' + (net > 0n ? '送出 ' : '收回 ') + statisticsAmount(net > 0n ? net : -net) + '。'); } else { lines.push(total.stake || total.reward || total.burn ? '已确认积分收支持平。' : '没有已确认的积分收支。'); }
-
-    if (total.unconfirmed) { lines.push(total.unconfirmed + ' 场积分结果待确认，未计入金额。'); }
-
-    $('statisticsSummary').replaceChildren(...lines.map(text => {
-        const li = document.createElement('li');
-        li.textContent = text;
-
-        return li;
-    }));
-}
-
 function renderStatisticsInsights(rows, total) {
-    const levels = statisticsLevels.map((_, level) => ({ ...sumStatistics(rows.filter(r => r.mode === 'solo' && r.difficulty === level)), level }));
-    $('statisticsAI').hidden = !!$('statisticsMode').value && $('statisticsMode').value !== 'solo';
-    statisticsTable('statisticsAILevels', levels.map(t => [statisticsLevels[t.level], t.games, statisticsRate(t), statisticsAmount(t.reward - t.burn, true)]));
-    statisticsSummary(rows, total, levels);
+    const kinds = ['solo', 'daily'].filter(kind => rows.some(r => r.kind === kind));
+    $('statisticsAI').hidden = !kinds.length;
+    const levels = kinds.flatMap(kind => statisticsLevels.map((_, level) => ({ ...sumStatistics(rows.filter(r => r.kind === kind && r.difficulty === level)), kind, level })));
+    statisticsTable('statisticsAILevels', levels.map(t => [statisticsKinds[t.kind] + ' · ' + statisticsLevels[t.level], t.started, t.humanWins, t.kind === 'daily' ? statisticsDailyRate(t) : statisticsRate(t), statisticsAmount(t.reward - t.burn, true)]));
+    statisticsSummary(rows, total);
     let reward = 0n, burn = 0n;
     statisticsTrendData = statisticsDates().map(day => {
         const today = rows.filter(r => r.day === day), sum = sumStatistics(today);

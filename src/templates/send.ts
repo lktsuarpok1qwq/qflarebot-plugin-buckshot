@@ -1,9 +1,11 @@
-import { scopeFor, targetFor } from '../conversation.js';
+import { cleanupSoon } from './cleanup.js';
+import type { RecallReceipt } from '../room/recalls.js';
+import { scopeFor } from '../conversation.js';
 import { button, keyboard, type OutgoingMessage, type PluginContext, type Session } from '@qqbot/sdk';
 import type { BuckshotRoom } from '../room/durable.js';
 import type { PanelReference } from '../room/model.js';
 import { DEFAULTS } from '../config.js';
-import { ensureDatabase, readRequestConfig, type RequestConfig } from '../integration/database.js';
+import { readRequestConfig, type RequestConfig } from '../integration/database.js';
 import type { ReplyConfiguration } from './reply-config.js';
 import { createReplyPresentation, preparePresentation, replyPresentation, type MessageInput } from './presentation.js';
 import { renderTemplate } from './replies.js';
@@ -12,6 +14,7 @@ const transient = new WeakSet<object>();
 const navigation = new WeakMap<object, string>();
 const previousNavigation = new WeakMap<object, string>();
 const replyKeys = new WeakMap<object, string>();
+const lifetimes = new WeakMap<object, Pick<RecallReceipt, 'kind' | 'until' | 'gameId' | 'version'>>();
 
 export function bindPreviousNavigation(message: OutgoingMessage | void, id: unknown): void {
     if (message && typeof message === 'object' && typeof id === 'string' && /^[a-f0-9-]{36}$/.test(id) && !['error', 'setupBlocked'].includes(replyKeys.get(message) ?? '')) { previousNavigation.set(message, id); }
@@ -38,7 +41,7 @@ export function renderMessage(config: ReplyConfiguration, key: string, input: Me
 
     if (result.buttons.length > 5 || result.buttons.some(row => row.length > 5 || row.some(b => [...b.label].length > 10))) { throw Error('消息按钮超出上限'); }
 
-    const navigationId = ['lobby', 'setupMode', 'setupDifficulty'].includes(key) ? crypto.randomUUID() : undefined;
+    const navigationId = ['lobby', 'setupMode', 'setupAmount', 'setupDifficulty', 'create', 'quit', 'close', 'aiRoster'].includes(key) ? crypto.randomUUID() : undefined;
     const commands: Record<string, string> = { daily: '/恶魔轮盘 挑战', help: '/恶魔轮盘 帮助', status: '/恶魔轮盘 状态', solo: '/恶魔轮盘 新建 单人', duo: '/恶魔轮盘 新建 双人', multi: '/恶魔轮盘 新建 多人' };
     const rows = result.buttons.map(row => row.map(b => {
         const data = b.data ?? commands[b.action];
@@ -47,7 +50,9 @@ export function renderMessage(config: ReplyConfiguration, key: string, input: Me
             return button.callback(b.label, JSON.stringify({ setup: data.trim().split(/\s+/).slice(1), ...(navigationId ? { navigation: navigationId } : {}) }), { id: 'buckshot' });
         }
 
-        return b.action === 'link' ? button.link(b.label, data!) : b.action === 'command' || b.action === 'draftAmount' || commands[b.action] ? button.command(b.label, data!, { enter: b.enter }) : button.callback(b.label, data!, { id: 'buckshot' });
+        const callbackData = data && navigationId && !['link', 'command', 'draftAmount'].includes(b.action) && !commands[b.action] ? JSON.stringify({ ...JSON.parse(data), navigation: navigationId }) : data;
+
+        return b.action === 'link' ? button.link(b.label, data!) : b.action === 'command' || b.action === 'draftAmount' || commands[b.action] ? button.command(b.label, data!, { enter: b.enter }) : button.callback(b.label, callbackData!, { id: 'buckshot' });
     }));
 
     const plain = plainPresentation.message(config, key, input, false, prepared).text;
@@ -60,9 +65,16 @@ export function renderMessage(config: ReplyConfiguration, key: string, input: Me
 
     if (navigationId) { navigation.set(outgoing, navigationId); }
 
-    if (['load', 'intel', 'noIntel', 'reminder', 'eliminate', 'timeoutEliminate'].includes(key) || key === 'menu' && input.reason || input.parts?.length && !input.parts.some(p => ['finish', 'noWinner', 'dailyRewardPaid'].includes(p.key))) { transient.add(outgoing); }
+    const permanent = ['finish', 'noWinner', 'dailyRewardPaid', 'statistics', 'matchStatistics'];
 
-    if (input.room && (key === 'panel' || key === 'menu' && !input.reason)) {
+    if (!permanent.includes(key) && !input.parts?.some(p => permanent.includes(p.key))) { transient.add(outgoing); }
+
+    if (navigationId) {
+        const kind = key === 'create' || key === 'quit' || key === 'close' || key === 'aiRoster' ? key : 'choice';
+        lifetimes.set(outgoing, { kind, until: input.expiresAt ?? input.now! + (['quit', 'close'].includes(key) ? 30000 : 600000), gameId: input.room?.gameId ?? input.values?.gameId, version: input.room?.version });
+    }
+
+    if (input.room && ['WAITING', 'PREPARING', 'PLAYING'].includes(input.room.status) && (key === 'panel' || key === 'menu' && !input.reason)) {
         panels.set(outgoing, { gameId: input.room.gameId, version: input.room.version, status: input.room.status, order: String(Date.now()).padStart(16, '0') + ':' + crypto.randomUUID() });
         transient.delete(outgoing);
     }
@@ -74,19 +86,6 @@ export async function waitForTime(time: number): Promise<void> {
     while (Date.now() < time) { await new Promise(resolve => setTimeout(resolve, time - Date.now())); }
 }
 
-export function recallLater(ctx: PluginContext, group: string, messageId: string, details: { gameId?: string; taskId?: string; loadId?: number } = {}, seconds = DEFAULTS.recallSeconds, sentAt = Date.now()): void {
-    ctx.waitUntil((async () => {
-        await waitForTime(sentAt + seconds * 1000);
-        let code: string | undefined;
-
-        try {
-            if (!await ctx.api.recallMessage(targetFor(group), messageId)) { code = 'RECALL_NOT_CONFIRMED:SDK_FALSE'; }
-        } catch { code = 'RECALL_EXCEPTION:RESULT_UNKNOWN'; }
-
-        if (code) { ctx.logger.warn('消息自动撤回未确认', { scene: targetFor(group).scene, ...details, code, attempts: 1, announcementAgeMs: Math.max(0, Date.now() - sentAt) }); }
-    })());
-}
-
 export async function deliver(ctx: PluginContext, session: Session, message: OutgoingMessage | void, request?: RequestConfig): Promise<void> {
     if (!message) { return; }
 
@@ -96,45 +95,29 @@ export async function deliver(ctx: PluginContext, session: Session, message: Out
 
     if (!['group', 'c2c'].includes(session.scene) || !result.ok || !result.messageId) { return; }
 
-    const scope = scopeFor(session);
-    const nav = typeof message === 'object' ? navigation.get(message) : undefined;
-    const previous = typeof message === 'object' ? previousNavigation.get(message) : undefined;
+    const scope = scopeFor(session), panel = panelReference(message);
 
-    if (nav || previous) {
-        try {
-            await ensureDatabase(ctx);
+    if (!panel && keepMessage(message)) { return; }
 
-            if (nav) { await ctx.db.run('INSERT INTO {coord_ops}(bot,id,game_id,request,state,expires_at) VALUES(?,?,?,?,?,?)', ctx.botId, 'nav:' + nav, 'navigation', JSON.stringify({ scope, messageId: result.messageId }), 'NAVIGATION', Date.now() + 600000); }
+    const object = typeof message === 'object' ? message : undefined;
+    let seconds = object ? recallDelays.get(object) : undefined;
 
-            if (previous) {
-                const old = await ctx.db.first<{ request: string }>("DELETE FROM {coord_ops} WHERE bot=? AND game_id=? AND id=? AND state=? AND json_extract(request,'$.scope')=? RETURNING request", ctx.botId, 'navigation', 'nav:' + previous, 'NAVIGATION', scope);
-
-                if (old) {
-                    const receipt = JSON.parse(old.request) as { messageId: string };
-                    const seconds = (await readRequestConfig(ctx, request)).values.recallSeconds;
-                    recallLater(ctx, scope, receipt.messageId, {}, seconds);
-                }
-            }
-        } catch { ctx.logger.warn('选择页清理记录未确认', { code: 'NAVIGATION_RECEIPT_UNKNOWN' }); }
-    }
-
-    const panel = panelReference(message);
-    let seconds = typeof message === 'object' ? recallDelays.get(message) : undefined;
-
-    if (seconds === undefined && (panel || !keepMessage(message))) {
+    if (seconds === undefined) {
         try { seconds = (await readRequestConfig(ctx, request)).values.recallSeconds; } catch {
+            seconds = DEFAULTS.recallSeconds;
             ctx.logger.warn('撤回配置读取失败，使用默认等待时间', { code: 'RECALL_CONFIG_UNAVAILABLE' });
         }
     }
 
-    if (panel) {
-        try {
-            const room = ctx.durable.get<BuckshotRoom>('BuckshotRoom', `${ctx.botId}:${scope}`);
-            const previous = await room.panelSent({ ...panel, messageId: result.messageId });
+    const room = ctx.durable.get<BuckshotRoom>('BuckshotRoom', `${ctx.botId}:${scope}`);
+    const receipt: RecallReceipt = {
+        messageId: result.messageId, target: scope, key: object ? replyKeys.get(object) ?? 'message' : 'message', seconds, sentAt: Date.now(), owner: session.userId,
+        ...(object ? lifetimes.get(object) : undefined), navigation: object ? navigation.get(object) : undefined, previous: object ? previousNavigation.get(object) : undefined
+    };
+    const save = async () => cleanupSoon(ctx, scope, await room.messageSent(ctx.botId, scope, receipt, panel ? { ...panel, messageId: result.messageId! } : undefined));
 
-            for (const id of previous) { recallLater(ctx, scope, id, { gameId: panel.gameId }, seconds); }
-        } catch { ctx.logger.warn('面板回执保存未确认', { gameId: panel.gameId, code: 'PANEL_RECEIPT_UNKNOWN' }); }
-    } else {
-        if (!keepMessage(message)) { recallLater(ctx, scope, result.messageId, {}, seconds); }
+    try { await save(); } catch {
+        ctx.logger.warn('消息回执保存等待重试', { key: receipt.key, gameId: receipt.gameId, code: 'MESSAGE_RECEIPT_PENDING' });
+        ctx.waitUntil(save().catch(() => { ctx.logger.warn('消息回执未能保存', { key: receipt.key, gameId: receipt.gameId, code: 'MESSAGE_RECEIPT_UNKNOWN' }); }));
     }
 }

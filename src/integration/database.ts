@@ -1,15 +1,25 @@
+import { statisticsUpgrade } from '../statistics/upgrade.js';
 import { statisticsDDL } from '../statistics/store.js';
 import type { PluginContext } from '@qqbot/sdk';
 import { identifier, validateConfig, type ConfigSnapshot } from '../config.js';
 import { requireRule } from '../game/types.js';
 
-export const DATABASE_VERSION = 5;
+export const DATABASE_VERSION = 6;
 
 export async function ensureDatabase(ctx: PluginContext): Promise<void> {
     async function marker() { return ctx.db.first<{ version: number }>('SELECT version FROM {meta} WHERE id=1'); }
 
     try {
         const row = await marker();
+
+        if (row?.version === 5) {
+            try { await ctx.db.batch(statisticsUpgrade().map(sql => ({ sql }))); } catch (error) {
+                // 并发升级由一个原子事务完成；其他调用只在标记已更新时继续。
+                if ((await marker().catch(() => null))?.version !== DATABASE_VERSION) { throw error; }
+            }
+
+            return;
+        }
 
         requireRule(row?.version === DATABASE_VERSION, '业务数据版本不匹配');
 

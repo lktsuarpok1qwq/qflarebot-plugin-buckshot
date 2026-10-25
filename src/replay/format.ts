@@ -18,8 +18,9 @@ export interface ReplayState {
 export interface ReplayStep { actor?: string; action: ReplayAction; state: ReplayState; results?: ReplayResult[] }
 export interface ReplayHeader {
     format: 'buckshot-replay'; version: 5;
-    game: { id: string; mode: string; personality?: import('../game/personality.js').Personality; challengeDate?: string; difficulty?: number; startedAt: string; endedAt?: string; scene: 'group' | 'c2c'; stakeMinor?: number; winner?: string };
-    config?: { showAIStyle?: true; turnSeconds?: number; multiplier?: number }; players: ReplayPlayer[]; integrity: { complete: boolean; reason?: string };
+    adminAI?: [string, import('../game/personality.js').Personality][];
+    game: { id: string; mode: string; challengeDate?: string; dailyRewardMinor?: number; difficulty?: number; startedAt: string; endedAt?: string; scene: 'group' | 'c2c'; stakeMinor?: number; winner?: string };
+    config?: { turnSeconds?: number; multiplier?: number }; players: ReplayPlayer[]; integrity: { complete: boolean; reason?: string };
 }
 export interface ReplayFile extends ReplayHeader { steps: ReplayWireStep[] }
 
@@ -55,17 +56,20 @@ function refreshPlayers(s: RoomState): void {
     for (const p of s.game?.players ?? s.members.map(m => ({ ...m, ai: false }))) {
         const id = playerId(s, p.id)!, saved = s.replay!.players.find(p => p.id === id);
 
-        if (saved) { saved.name = p.name; } else { s.replay!.players.push({ id, name: p.name, ...(p.ai ? { ai: true as const } : {}) }); }
+        const name = p.ai ? p.name : s.members.find(m => m.id === p.id)?.name ?? p.name;
+
+        if (saved) { saved.name = name; } else { s.replay!.players.push({ id, name, ...(p.ai ? { ai: true as const } : {}) }); }
     }
 }
 
 export function replayHeader(s: RoomState): ReplayHeader {
     refreshPlayers(s);
-    const c = s.config.values, config = { ...(c.showAIStyle ? { showAIStyle: true as const } : {}), ...(c.turnSeconds !== 60 ? { turnSeconds: c.turnSeconds } : {}), ...(s.stake && s.mode === 'solo' ? { multiplier: c.multipliers[s.difficulty] / 1000 } : {}) };
+    const c = s.config.values, config = { ...(c.turnSeconds !== 60 ? { turnSeconds: c.turnSeconds } : {}), ...(s.stake && s.mode === 'solo' ? { multiplier: c.multipliers[s.difficulty] / 1000 } : {}) };
 
     return {
         format: 'buckshot-replay', version: 5,
-        game: { id: s.gameId, mode: s.mode, ...(s.aiPersonality ? { personality: s.aiPersonality } : {}), ...(s.challenge ? { challengeDate: s.challenge.date } : {}), startedAt: new Date(s.statistics?.startedAt ?? s.createdAt).toISOString(), scene: isPrivateScope(s.groupId) ? 'c2c' : 'group', ...(s.mode === 'solo' ? { difficulty: s.difficulty } : {}), ...(s.stake ? { stakeMinor: s.stake } : {}), ...(s.status === 'CLOSED' ? { endedAt: new Date().toISOString() } : {}), ...(s.game?.winner ? { winner: playerId(s, s.game.winner) } : {}) },
+        adminAI: s.mode === 'solo' && s.aiPersonality ? [[playerId(s, 'ai')!, s.aiPersonality]] : (s.opponents ?? []).map(p => [playerId(s, p.id)!, p.personality]),
+        game: { id: s.gameId, mode: s.mode, ...(s.challenge ? { challengeDate: s.challenge.date, dailyRewardMinor: c.dailyReward } : {}), startedAt: new Date(s.statistics?.startedAt ?? s.createdAt).toISOString(), scene: isPrivateScope(s.groupId) ? 'c2c' : 'group', ...(s.mode === 'solo' ? { difficulty: s.difficulty } : {}), ...(s.stake ? { stakeMinor: s.stake } : {}), ...(s.status === 'CLOSED' ? { endedAt: new Date().toISOString() } : {}), ...(s.game?.winner ? { winner: playerId(s, s.game.winner) } : {}) },
         ...(Object.keys(config).length ? { config } : {}), players: structuredClone(s.replay!.players),
         integrity: { complete: !s.replay!.truncated, ...(s.replay!.truncated ? { reason: '记录达到大小或操作步数上限，后续步骤未收录' } : {}) }
     };

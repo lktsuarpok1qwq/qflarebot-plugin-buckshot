@@ -1,19 +1,24 @@
 import type { PluginDB } from '@qqbot/sdk';
 import { COUNTS, MONEY, type Fact } from './model.js';
 
-export const STAT_COLUMNS = ['bot', 'game', 'day', 'mode', 'paid', 'difficulty', ...COUNTS, ...MONEY] as const;
+export const STAT_COLUMNS = ['bot', 'game', 'day', 'mode', 'kind', 'paid', 'difficulty', ...COUNTS, ...MONEY] as const;
 
 export function statisticsDDL(): string[] {
     const numbers = [...COUNTS, ...MONEY];
 
     return [
-        `CREATE TABLE IF NOT EXISTS {stats_games} (${STAT_COLUMNS.map(k => ['bot', 'game', 'day', 'mode'].includes(k) ? k + ' TEXT NOT NULL' : k + ' INTEGER NOT NULL').join(',')},PRIMARY KEY(bot,game)) WITHOUT ROWID`,
-        `CREATE TABLE IF NOT EXISTS {stats_daily} (bot TEXT NOT NULL,day TEXT NOT NULL,mode TEXT NOT NULL,paid INTEGER NOT NULL,difficulty INTEGER NOT NULL,${numbers.map(k => k + ' INTEGER NOT NULL').join(',')},PRIMARY KEY(bot,day,mode,paid,difficulty)) WITHOUT ROWID`,
-        `CREATE TRIGGER IF NOT EXISTS {stats_rollup} AFTER INSERT ON {stats_games} BEGIN UPDATE {stats_daily} SET ${numbers.map(k => k + '=' + k + '+NEW.' + k).join(',')} WHERE bot=NEW.bot AND day=NEW.day AND mode=NEW.mode AND paid=NEW.paid AND difficulty=NEW.difficulty; INSERT OR IGNORE INTO {stats_daily}(bot,day,mode,paid,difficulty,${numbers.join(',')}) VALUES(NEW.bot,NEW.day,NEW.mode,NEW.paid,NEW.difficulty,${numbers.map(k => 'NEW.' + k).join(',')}); END`
+        `CREATE TABLE IF NOT EXISTS {stats_games} (${STAT_COLUMNS.map(k => ['bot', 'game', 'day', 'mode', 'kind'].includes(k) ? k + ' TEXT NOT NULL' : k + ' INTEGER NOT NULL').join(',')},PRIMARY KEY(bot,game)) WITHOUT ROWID`,
+        `CREATE TABLE IF NOT EXISTS {stats_daily} (bot TEXT NOT NULL,day TEXT NOT NULL,mode TEXT NOT NULL,kind TEXT NOT NULL,paid INTEGER NOT NULL,difficulty INTEGER NOT NULL,${numbers.map(k => k + ' INTEGER NOT NULL').join(',')},PRIMARY KEY(bot,day,mode,kind,paid,difficulty)) WITHOUT ROWID`,
+        `CREATE TRIGGER IF NOT EXISTS {stats_rollup} AFTER INSERT ON {stats_games} BEGIN UPDATE {stats_daily} SET ${numbers.map(k => k + '=' + k + '+NEW.' + k).join(',')} WHERE bot=NEW.bot AND day=NEW.day AND mode=NEW.mode AND kind=NEW.kind AND paid=NEW.paid AND difficulty=NEW.difficulty; INSERT OR IGNORE INTO {stats_daily}(bot,day,mode,kind,paid,difficulty,${numbers.join(',')}) VALUES(NEW.bot,NEW.day,NEW.mode,NEW.kind,NEW.paid,NEW.difficulty,${numbers.map(k => 'NEW.' + k).join(',')}); END`
     ];
 }
 
 export async function publishFact(db: PluginDB, fact: Fact): Promise<void> {
+    // 升级前已经封存的任务仍按原摘要恢复，不能补猜玩法或重新结算。
+    if (!Object.hasOwn(fact, 'kind')) {
+        fact = { ...fact, kind: 'unknown', started: 0, unopened: 0, timedGames: 0, completedDurationMs: 0, completedShots: 0, completedItems: 0, completedTimeouts: 0 };
+    }
+
     const inserted = await db.run(`INSERT OR IGNORE INTO {stats_games}(${STAT_COLUMNS.join(',')}) VALUES(${STAT_COLUMNS.map(() => '?').join(',')})`, ...STAT_COLUMNS.map(k => fact[k]));
 
     if (!inserted.changes) {

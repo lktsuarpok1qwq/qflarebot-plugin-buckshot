@@ -52,7 +52,7 @@ export default definePlugin({
 
                 message = await interact(ctx, session, input, templates, requestConfig);
 
-                if (input.setup) { bindPreviousNavigation(message, input.navigation); }
+                if (input.navigation) { bindPreviousNavigation(message, input.navigation); }
             } catch (error) { message = failure(error, templates); }
 
             await deliver(ctx, session, message, requestConfig);

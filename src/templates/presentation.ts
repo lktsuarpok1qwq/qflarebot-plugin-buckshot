@@ -8,7 +8,7 @@ import type { view } from '../room/state.js';
 import type { Action } from '../game/types.js';
 
 export interface Part { key: string; values: Record<string, string>; users?: Record<string, string> }
-export interface MessageInput { aiMenu?: 'add' | 'remove'; path?: number[]; scene?: 'group' | 'c2c'; mentionCurrent?: boolean; now?: number; values?: Record<string, string>; room?: ReturnType<typeof view>; parts?: Part[]; moves?: Action[]; offset?: number; actor?: string; dynamic?: Record<string, string>; choices?: string[]; reason?: string; name?: string; notice?: string }
+export interface MessageInput { expiresAt?: number; aiMenu?: 'add' | 'remove'; path?: number[]; scene?: 'group' | 'c2c'; now?: number; values?: Record<string, string>; room?: ReturnType<typeof view>; parts?: Part[]; moves?: Action[]; offset?: number; actor?: string; dynamic?: Record<string, string>; choices?: string[]; reason?: string; name?: string; notice?: string }
 
 const variables = new WeakMap<ReplyConfiguration['replies'], Map<string, { source: string; names: string[] }>>();
 
@@ -24,7 +24,7 @@ export function preparePresentation(input: MessageInput) {
     const now = input.now ?? Date.now();
 
     return {
-        menu, players, missingNames, current: s?.game ? players.get(s.game.current) : undefined, offset, count, canQuit, selected: menu.entries.slice(offset, offset + count),
+        menu, players, missingNames, names: new Map(s?.members.map(m => [m.id, m.name])), current: s?.game ? players.get(s.game.current) : undefined, offset, count, canQuit, selected: menu.entries.slice(offset, offset + count),
         stake: s?.stake ? formatPoints(s.stake) : '', seconds: s ? String(Math.ceil(Math.max(0, s.deadline === undefined ? s.remainingMs : s.deadline - now) / 1000)) : '', reading: Math.max(0, (s?.aiReadUntil ?? 0) - now)
     };
 }
@@ -100,7 +100,7 @@ export function createReplyPresentation(render: typeof renderTemplate, escape: t
                     const data = item.data ?? dynamic.link;
 
                     if (data) { result.push({ ...item, data }); }
-                } else if (item.action.startsWith('draft') || ['addAI', 'removeAI', 'join', 'ready', 'start', 'choose', 'quit', 'confirmCreate', 'confirmQuit', 'next', 'previous', 'menuBack'].includes(item.action)) {
+                } else if (item.action.startsWith('draft') || ['leave', 'close', 'confirmClose', 'addAI', 'removeAI', 'join', 'ready', 'start', 'choose', 'quit', 'confirmCreate', 'confirmQuit', 'next', 'previous', 'menuBack'].includes(item.action)) {
                     if (dynamic[item.action]) { result.push({ ...item, data: dynamic[item.action] }); }
                 } else { result.push({ ...item }); }
             }
@@ -122,8 +122,8 @@ export function createReplyPresentation(render: typeof renderTemplate, escape: t
         const t = (k: string, v: Record<string, string> = {}, r: string[] = []) => text(config, k, v, r);
 
         const group = input.scene === 'group' || input.scene === undefined && !!input.room && !isPrivateScope(input.room.groupId);
-        const name = (id: string, value: string) => group && prepared.missingNames.has(id) ? qqAt(id) : escape(value);
-        const displayName = (p: { id?: string; name: string; ai?: boolean; life?: number }, mention = true) => t(p.ai ? 'dealerName' : p.life === 0 ? 'eliminatedName' : input.room?.mode !== 'solo' && input.room?.status === 'PLAYING' && p.id === input.room.game?.current ? 'activeName' : 'humanName', { name: !p.ai && mention ? name(p.id ?? '', p.name) : escape(p.name) }, ['name']);
+        const name = (id: string, value: string) => group && prepared.missingNames.has(id) ? qqAt(id) : escape(prepared.names.get(id) ?? value);
+        const displayName = (p: { id?: string; name: string; ai?: boolean; life?: number }) => t(p.life === 0 ? 'eliminatedName' : input.room?.status === 'PLAYING' && p.id === input.room.game?.current ? 'activeName' : p.ai ? 'dealerName' : 'humanName', { name: !p.ai ? name(p.id ?? '', p.name) : escape(p.name) }, ['name']);
 
         if (key === 'aiRoster') {
             const s = input.room!, base = { gameId: s.gameId, expectedVersion: s.version };
@@ -138,10 +138,10 @@ export function createReplyPresentation(render: typeof renderTemplate, escape: t
             const rows = s.game ? s.game.players.map((p, i) => t('player', { number: String(i + 1), name: displayName(p), life: String(p.life), control: p.control === 'none' ? '' : t('controlled'), inventory: p.inventory.length ? p.inventory.map((item, n) => t('inventoryItem', { number: String(n + 1), item: t('item' + item) }, ['item'])).join(t('inventorySeparator')) : t('inventoryEmpty') }, ['name', 'inventory', 'control'])) : [...s.members, ...(s.opponents ?? []).map(p => ({ ...p, ai: true, ready: true }))].map(p => t('member', { name: displayName(p), ready: t(p.ready ? 'ready' : 'notReady') }, ['name', 'ready']));
             const { seconds, reading, current } = prepared;
             const timer = reading && s.status === 'PLAYING' && !s.paused && !s.recovery ? t('timerReading', { seconds: String(Math.ceil(reading / 1000)) }) : s.status !== 'PLAYING' ? t(s.game ? 'timerEnded' : 'timerWaiting') : t(s.paused || s.recovery ? 'timerPaused' : 'timer', { seconds });
-            const currentName = current ? group && input.mentionCurrent && !current.ai && s.status === 'PLAYING' && !s.paused && !s.recovery ? qqAt(current.id) : current.ai ? escape(current.name) : name(current.id, current.name) : '';
+            const currentName = current ? group && !current.ai && s.status === 'PLAYING' && !s.paused && !s.recovery ? qqAt(current.id) : current.ai ? escape(current.name) : name(current.id, current.name) : '';
             Object.assign(values, { gameId: s.gameId, version: String(s.version), status: t('status' + s.status), paused: s.paused ? t('paused') : '', recovery: s.recovery ? t('recovery') : '', stake: s.stake ? t('stake', { amount: prepared.stake }) : t('free'), items: rows.filter(Boolean).join(config.historySeparator ?? t('playerSeparator')), timer, turn: s.game ? t('turn', { name: currentName, direction: t(s.game.direction === 1 ? 'forward' : 'reverse') }, ['name', 'direction']) : t('waiting') });
 
-            if (s.challengeDate) { values.stake += '\n' + t('dailyLabel', { date: s.challengeDate }); }
+            if (s.challengeDate) { values.stake = t('dailyLabel', { date: s.challengeDate }) + '\n' + t('dailyReward', { amount: formatPoints(s.dailyReward ?? 0) }) + '\n' + t('dailyNoLoss'); }
 
             if (s.showAIStyle && s.aiPersonality) { values.stake += '\n' + t('dealerStyle', { style: t('personality' + s.aiPersonality) }, ['style']); }
 
@@ -155,7 +155,7 @@ export function createReplyPresentation(render: typeof renderTemplate, escape: t
                 values.turn = t('aiWaiting');
             }
 
-            if (withButtons) { for (const action of s.status === 'WAITING' ? ['join', 'ready', 'start'] : s.status === 'PLAYING' ? ['choose', 'quit'] : []) { dynamic[action] = JSON.stringify({ gameId: s.gameId, expectedVersion: s.version, ...(action === 'choose' ? { menu: 0 } : { action: { type: action === 'quit' ? 'confirmQuit' : action } }) }); } }
+            if (withButtons) { for (const action of s.status === 'WAITING' ? ['join', 'ready', 'start', 'leave', 'close'] : s.status === 'PLAYING' ? ['choose', 'quit'] : []) { dynamic[action] = JSON.stringify({ gameId: s.gameId, expectedVersion: s.version, ...(action === 'choose' ? { menu: 0 } : { action: { type: action === 'quit' ? 'confirmQuit' : action === 'close' ? 'confirmClose' : action } }) }); } }
         } else if (key === 'menu') {
             if (input.reason === 'menuSpectator' || input.reason === 'menuOtherTurn') { return { text: t(input.reason, { name: name(input.actor ?? '', input.name ?? '') }, ['name']), buttons: [] }; }
 
@@ -165,9 +165,9 @@ export function createReplyPresentation(render: typeof renderTemplate, escape: t
             const lines = selected.map((entry, i) => {
                 const move = entry.display, number = String(i + 1);
 
-                if (entry.player) { return t('menuTarget', { number, target: displayName(player(entry.player), false) }, ['target']); }
+                if (entry.player) { return t('menuTarget', { number, target: displayName(player(entry.player)) }, ['target']); }
 
-                if (move.type === 'shoot') { return t('menuShot', { number, target: displayName(player(move.target), false) }, ['target']); }
+                if (move.type === 'shoot') { return t('menuShot', { number, target: displayName(player(move.target)) }, ['target']); }
 
                 return move.type === 'item' ? t('menuItem', { number, slot: String(move.slot + 1), item: t('item' + (entry.item ?? player(input.actor!).inventory[move.slot])), target: '', stolen: '', stolenTarget: '' }, ['item']) : '';
             });
@@ -175,7 +175,7 @@ export function createReplyPresentation(render: typeof renderTemplate, escape: t
 
             if (menu.stage) { values.items = t(menu.stage, { item: t('item' + menu.item) }, ['item']) + '\n' + values.items; }
 
-            values.panel = message(config, 'panel', { ...input, notice: undefined, mentionCurrent: input.mentionCurrent ?? false }, false, prepared).text;
+            values.panel = message(config, 'panel', { ...input, notice: undefined }, false, prepared).text;
             raw.push('panel', 'items');
 
             if (withButtons) {
@@ -199,7 +199,7 @@ export function createReplyPresentation(render: typeof renderTemplate, escape: t
             if (key === 'setupDifficulty') {
                 values.stake = Number(values.stake) ? t('stake', { amount: formatPoints(Number(values.stake)) }) : t('free');
 
-                if (values.challengeDate) { values.stake += '\n' + t('dailyLabel', { date: values.challengeDate }) + '\n' + t('dailyHint'); }
+                if (values.challengeDate) { values.stake = t('dailyLabel', { date: values.challengeDate }) + '\n' + t('dailyHint') + '\n' + t('dailyNoLoss'); }
 
                 raw.push('stake');
             }
@@ -214,7 +214,7 @@ export function createReplyPresentation(render: typeof renderTemplate, escape: t
             values.difficulty = mode === 'Solo' ? t('level' + values.difficulty) : t(mode === 'Multi' && !Number(values.stake) ? 'multiFreeMatch' : 'humanMatch');
             values.stake = Number(values.stake) ? t('stake', { amount: formatPoints(Number(values.stake)) }) : t('free');
 
-            if (values.challengeDate) { values.stake += '\n' + t('dailyLabel', { date: values.challengeDate }) + '\n' + t('dailyHint'); }
+            if (values.challengeDate) { values.stake = t('dailyLabel', { date: values.challengeDate }) + '\n' + t('dailyHint') + '\n' + t('dailyNoLoss'); }
 
             values.reward = values.challengeDate ? t('dailyReward', { amount: formatPoints(Number(values.dailyReward || 0)) }) : values.reward ? (mode === 'Solo' ? t('soloReward', { amount: formatPoints(Number(values.reward)) }) : t('multiReward')) : '';
             raw.push('mode', 'difficulty', 'stake', 'reward');

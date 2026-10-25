@@ -227,6 +227,12 @@ export async function interact(ctx: PluginContext, session: Session, data: unkno
 
         await supplementName(ctx, room, result, session);
 
+        if (request.action.type === 'confirmClose') {
+            return renderMessage(templates, 'close', { room: result, values: { gameId: result.gameId }, dynamic: { confirmClose: JSON.stringify({ ...base(result), action: { type: 'close' } }) } });
+        }
+
+        if (request.action.type === 'close') { return renderMessage(templates, 'roomClosed', { room: result, values: { gameId: result.gameId } }); }
+
         if (request.action.type === 'confirmQuit') {
             return renderMessage(templates, 'quit', { room: result, values: { gameId: result.gameId, version: String(result.version) }, dynamic: { confirmQuit: JSON.stringify({ ...base(result), action: { type: 'quit' } }) } });
         }
@@ -240,11 +246,11 @@ export async function interact(ctx: PluginContext, session: Session, data: unkno
 
     const sent = await drain(ctx, scope, session, initial, true, {
         foreground: true, onComplete: async result => {
-            if (request.action.type !== 'confirmQuit') { await deliver(ctx, session, await response(result), requestConfig); }
+            if (!['confirmQuit', 'confirmClose'].includes(request.action.type)) { await deliver(ctx, session, await response(result), requestConfig); }
         }
     });
 
-    if (sent.continuing && request.action.type !== 'confirmQuit') { return; }
+    if (sent.continuing && !['confirmQuit', 'confirmClose'].includes(request.action.type)) { return; }
 
     return response(sent);
 }

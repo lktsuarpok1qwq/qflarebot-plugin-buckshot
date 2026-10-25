@@ -33,7 +33,7 @@ export async function prepareCreate(ctx: PluginContext, session: Session, args: 
     const create = { ...(challenge ? { challenge } : {}), mode, stake, difficulty, gameId, botId: ctx.botId, groupId: scopeFor(session), config, member: { id: session.userId, name: cleanName(session.userName), ready: true, privateId: session.userId } };
     await ctx.db.run('INSERT INTO {coord_ops}(bot,id,game_id,request,state,expires_at) VALUES(?,?,?,?,?,?)', ctx.botId, `create:${gameId}`, gameId, JSON.stringify({ input: create, expiresAt }), 'CREATE_READY', expiresAt);
 
-    return renderMessage(templates, 'create', { values: { ...(challenge ? { challengeDate: challenge.date, dailyReward: String(config.values.dailyReward) } : {}), mode: modeKey(mode), stake: String(stake), difficulty: String(difficulty), reward: stake ? String(payout(stake, config.values.multipliers[difficulty])) : '', gameId }, dynamic: { confirmCreate: JSON.stringify({ create: { mode, stake, difficulty }, owner: session.userId, gameId }) } });
+    return renderMessage(templates, 'create', { expiresAt, values: { ...(challenge ? { challengeDate: challenge.date, dailyReward: String(config.values.dailyReward) } : {}), mode: modeKey(mode), stake: String(stake), difficulty: String(difficulty), reward: stake ? String(payout(stake, config.values.multipliers[difficulty])) : '', gameId }, dynamic: { confirmCreate: JSON.stringify({ create: { mode, stake, difficulty }, owner: session.userId, gameId }) } });
 }
 
 async function pointsReason(ctx: PluginContext, mode: Mode): Promise<string | undefined> {

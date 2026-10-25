@@ -2,7 +2,7 @@ import type { RoomState } from '../room/model.js';
 import type { ReplayAction } from '../replay/format.js';
 import { dateParts } from '../replay/format.js';
 
-export const COUNTS = ['games', 'cancelled', 'draws', 'players', 'humanWins', 'shots', 'live', 'blank', 'ejected', 'loads', 'items', 'damage', 'healing', 'timeouts', 'durationMs', 'unconfirmed'] as const;
+export const COUNTS = ['games', 'cancelled', 'draws', 'players', 'humanWins', 'shots', 'live', 'blank', 'ejected', 'loads', 'items', 'damage', 'healing', 'timeouts', 'durationMs', 'unconfirmed', 'started', 'unopened', 'timedGames', 'completedDurationMs', 'completedShots', 'completedItems', 'completedTimeouts'] as const;
 export const MONEY = ['stake', 'principal', 'transfer', 'refund', 'reward', 'burn'] as const;
 export type CountKey = typeof COUNTS[number];
 export type MoneyKey = typeof MONEY[number];
@@ -19,7 +19,8 @@ export interface PlayerResult {
     shots: number; live: number; blank: number; items: number; damage: number; healing: number; timeouts: number; quit: boolean;
     money: 'free' | 'confirmed' | 'unconfirmed'; stake: number | null; returned: number | null; reward: number | null; net: number | null;
 }
-export type Fact = { bot: string; game: string; day: string; mode: string; paid: number; difficulty: number } & Counts & Money;
+export type StatisticsKind = 'unknown' | 'solo' | 'daily' | 'duo' | 'multi' | 'multiAI';
+export type Fact = { bot: string; game: string; day: string; mode: string; kind: StatisticsKind; paid: number; difficulty: number } & Counts & Money;
 
 export function freshCounters(): MatchCounters { return { version: 1, cancelled: false, shots: 0, live: 0, blank: 0, ejected: 0, loads: 0, items: 0, damage: 0, healing: 0, timeouts: 0, players: Object.create(null) }; }
 
@@ -192,10 +193,15 @@ export function statisticsFact(s: RoomState): Fact | undefined {
 
     if (c?.sealedAt === undefined) { return; }
 
-    const money = confirmedMoney(s), started = c.startedAt !== undefined;
+    const money = confirmedMoney(s), started = c.startedAt !== undefined, completed = started && !c.cancelled;
+    const timed = completed && c.finishedAt !== undefined;
+    const kind: StatisticsKind = s.challenge ? 'daily' : s.mode === 'multi' && (s.opponents?.length ?? 0) > 0 ? 'multiAI' : s.mode;
 
     return {
-        bot: s.botId, game: s.gameId, day: dateParts(c.sealedAt).date, mode: s.mode, paid: s.stake ? 1 : 0, difficulty: s.mode === 'solo' ? s.difficulty : -1,
+        bot: s.botId, game: s.gameId, day: dateParts(c.sealedAt).date, mode: s.mode, kind, paid: s.stake ? 1 : 0, difficulty: s.mode === 'solo' ? s.difficulty : -1,
+        started: started ? 1 : 0, unopened: started ? 0 : 1, timedGames: timed ? 1 : 0,
+        completedDurationMs: timed ? Math.max(0, c.finishedAt! - c.startedAt!) : 0,
+        completedShots: completed ? c.shots : 0, completedItems: completed ? c.items : 0, completedTimeouts: completed ? c.timeouts : 0,
         games: started && !c.cancelled ? 1 : 0, cancelled: !started || c.cancelled ? 1 : 0, draws: started && !c.cancelled && !s.game?.winner ? 1 : 0,
         players: started ? s.members.length : 0, humanWins: started && !c.cancelled && s.game?.winner && s.members.some(m => m.id === s.game!.winner) ? 1 : 0,
         shots: c.shots, live: c.live, blank: c.blank, ejected: c.ejected, loads: c.loads, items: c.items, damage: c.damage, healing: c.healing, timeouts: c.timeouts,

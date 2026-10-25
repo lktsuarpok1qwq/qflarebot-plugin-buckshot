@@ -21,7 +21,7 @@ export function prepareDelivery(s: RoomState, claim: boolean) {
             const player = s.game?.players.find(p => p.id === s.game?.current);
             const menu = next.panel && s.status === 'PLAYING' && !s.paused && !s.recovery && player && !player.ai;
             next.payload = renderMessage(DEFAULT_CONFIGURATION, menu ? 'menu' : next.panel ? 'panel' : next.parts![0].key,
-                { room: next.snapshot ?? room, scene: next.private || isPrivateScope(s.groupId) ? 'c2c' : 'group', parts: next.parts?.some(p => ['finish', 'noWinner'].includes(p.key)) ? [...next.parts, ...endStatistics(s)] : next.parts, mentionCurrent: next.panel && !isPrivateScope(s.groupId), ...(menu ? { actor: player.id, moves: legalActions(s.game!, player.id) } : {}) });
+                { room: next.snapshot ?? room, scene: next.private || isPrivateScope(s.groupId) ? 'c2c' : 'group', parts: next.parts?.some(p => ['finish', 'noWinner'].includes(p.key)) ? [...next.parts, ...endStatistics(s)] : next.parts, ...(menu ? { actor: player.id, moves: legalActions(s.game!, player.id) } : {}) });
             next.keep = keepMessage(next.payload);
             next.panelOrder = panelReference(next.payload)?.order;
         }

@@ -31,13 +31,14 @@ export interface RoomState {
     paused: boolean; recovery: boolean; reason?: string; remainingMs: number; deadline?: number; reminderSent: boolean;
     aiDue?: number; aiReadUntil?: number; aiPaceUntil?: number; outbox: Task[]; seq: number; money: MoneyTask[]; reserved: boolean;
     reserveAt?: number; reserveUntil?: number; renewal: number; released: string[];
+    closeConfirmation?: { actor: string; version: number; expires: number };
     confirmations: Record<string, { version: number; expires: number }>; indexVersion: number; indexDue?: number | null; indexStatus?: Status; departures?: string[]; abortRequested?: boolean; pendingReleases?: { id: string; claimId: string }[];
 }
 export interface Request {
     gameId: string; actionId: string; expectedVersion: number; actor: string;
     action: { type: 'join'; member: Member } | { type: 'leave' } | { type: 'ready' } | { type: 'start' }
     | { type: 'addAI'; difficulty: number } | { type: 'removeAI'; target: string }
-    | { type: 'confirmQuit' } | { type: 'quit' } | { type: 'play'; move: Action }
+    | { type: 'confirmClose' } | { type: 'close' } | { type: 'confirmQuit' } | { type: 'quit' } | { type: 'play'; move: Action }
     | { type: 'pause' } | { type: 'resume' } | { type: 'cancel' } | { type: 'retry'; taskId: string; plain?: boolean }
     | { type: 'reconcile'; taskId: string } | { type: 'removed'; target: string } | { type: 'abort' };
 }

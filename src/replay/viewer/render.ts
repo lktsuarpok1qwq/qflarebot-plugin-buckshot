@@ -2,7 +2,7 @@ import { createReplayCodec } from '../codec.js';
 import { DEFAULT_REPLIES } from '../../templates/replies.js';
 import { REPLAY_ITEMS } from '../format.js';
 
-const keys = ['dailyLabel', 'dealerStyle', 'personalitybalanced', 'personalityaggressive', 'personalitycautious', 'personalitytricky', 'panel', 'humanName', 'activeName', 'eliminatedName', 'dealerName', 'member', 'player', 'inventoryItem', 'inventoryEmpty', 'inventorySeparator', 'playerSeparator', 'turn', 'waiting', 'free', 'stake', 'ready', 'notReady', 'controlled', 'target', 'stolen', 'stolenTarget', 'load', 'shot', 'item', 'steal', 'skip', 'eject', 'eliminate', 'timeout', 'timeoutEliminate', 'finish', 'noWinner', 'intel', 'noIntel', 'live', 'blank', ...REPLAY_ITEMS.map(i => 'item' + i)];
+const keys = ['dailyReward', 'dailyNoLoss', 'dailyLabel', 'dealerStyle', 'personalitybalanced', 'personalityaggressive', 'personalitycautious', 'personalitytricky', 'panel', 'humanName', 'activeName', 'eliminatedName', 'dealerName', 'member', 'player', 'inventoryItem', 'inventoryEmpty', 'inventorySeparator', 'playerSeparator', 'turn', 'waiting', 'free', 'stake', 'ready', 'notReady', 'controlled', 'target', 'stolen', 'stolenTarget', 'load', 'shot', 'item', 'steal', 'skip', 'eject', 'eliminate', 'timeout', 'timeoutEliminate', 'finish', 'noWinner', 'intel', 'noIntel', 'live', 'blank', ...REPLAY_ITEMS.map(i => 'item' + i)];
 const texts = JSON.stringify(Object.fromEntries(keys.map(k => [k, DEFAULT_REPLIES[k]]))).replaceAll('<', '\\u003c');
 
 // 静态展示规则仅打包一份；玩家 JSON 只包含操作事实。
@@ -21,7 +21,7 @@ function replayItem(code) { return replayText('item' + replayItems[code]); }
 function replayDisplay(id, state) {
     const player = replayData.players.find(p => p.id === id), p = state.players.find(p => p.p === id);
 
-    return replayText(player?.ai ? 'dealerName' : p?.hp === 0 ? 'eliminatedName' : replayData.game.mode !== 'solo' && state.status === 'PLAYING' && state.current === id ? 'activeName' : 'humanName', { name: replayName(id) });
+    return replayText(p?.hp === 0 ? 'eliminatedName' : state.status === 'PLAYING' && state.current === id ? 'activeName' : player?.ai ? 'dealerName' : 'humanName', { name: replayName(id) });
 }
 
 function replayActionLabel(action, actor) {
@@ -37,7 +37,7 @@ function replayPanel(step) {
         return s.current ? replayText('player', { number: i + 1, name, life: p.hp, control: p.control ? replayText('controlled') : '', inventory: p.items.length ? p.items.map((item, n) => replayText('inventoryItem', { number: n + 1, item: replayItem(item) })).join(replayText('inventorySeparator')) : replayText('inventoryEmpty') }) : replayText('member', { name, ready: replayText(p.ready ? 'ready' : 'notReady') });
     });
 
-    return replayText('panel', { status: replayStatuses[s.status], paused: s.paused ? ' · ⏸️ 暂停' : '', gameId: replayData.game.id, stake: (replayData.game.stakeMinor ? replayText('stake', { amount: (replayData.game.stakeMinor / 100).toFixed(2) }) : replayText('free')) + (replayData.game.challengeDate ? '\n' + replayText('dailyLabel', { date: replayData.game.challengeDate }) : '') + (replayData.config?.showAIStyle && replayData.game.personality ? '\n' + replayText('dealerStyle', { style: replayText('personality' + replayData.game.personality) }) : ''), timer: '🎞️ 第 ' + replayPosition + ' 步', items: rows.join(replayText('playerSeparator')), turn: s.current ? replayText('turn', { name: replayName(s.current) }) : replayText('waiting') });
+    return replayText('panel', { status: replayStatuses[s.status], paused: s.paused ? ' · ⏸️ 暂停' : '', gameId: replayData.game.id, stake: replayData.game.challengeDate ? replayText('dailyLabel', { date: replayData.game.challengeDate }) + (replayData.game.dailyRewardMinor === undefined ? '' : '\n' + replayText('dailyReward', { amount: (replayData.game.dailyRewardMinor / 100).toFixed(2) })) + '\n' + replayText('dailyNoLoss') : replayData.game.stakeMinor ? replayText('stake', { amount: (replayData.game.stakeMinor / 100).toFixed(2) }) : replayText('free'), timer: '🎞️ 第 ' + replayPosition + ' 步', items: rows.join(replayText('playerSeparator')), turn: s.current ? replayText('turn', { name: replayName(s.current) }) : replayText('waiting') });
 }
 
 function replayResult(result) {
@@ -95,7 +95,7 @@ function renderReplay() {
     $('replayCount').textContent = '第 ' + replayPosition + ' / ' + last + ' 步' + (step.state.turn ? ' · 第 ' + step.state.turn + ' 回合 · ' + (step.state.direction === -1 ? '反向' : '正向') : '') + (step.state.saw ? ' · 🪚 手锯强化' : '');
     $('replayPrev').disabled = replayPosition === 0;
     $('replayNext').disabled = replayPosition === last;
-    $('replayTimeline').value = String(replayPosition);
+    syncReplayTimeline();
     $('replayPanel').textContent = replayPanel(step);
     renderReplayAmmo();
     $('replayAction').textContent = replayActionLabel(step.action, step.actor);

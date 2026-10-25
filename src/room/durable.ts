@@ -1,3 +1,4 @@
+import { completeChoices, expireRecalls, nextRecall, registerRecall, type RecallReceipt, type RecallState } from './recalls.js';
 import { moneyReason } from './money-reason.js';
 import { formatPoints } from '../amounts.js';
 import { validateChallenge } from '../game/random.js';
@@ -115,6 +116,21 @@ export class BuckshotRoom extends StoredObject {
                         if (roomText !== original) { this.pending.set('room', state); } else { this.pending.delete('room'); }
                     }
 
+                    if (state && ['CANCELLED', 'CLOSED'].includes(state.status)) {
+                        for (const messageId of this.retirePanel(state)) {
+                            this.registerMessage(state.botId, state.groupId, { messageId, target: state.groupId, key: 'oldPanel', gameId: state.gameId, seconds: state.config.values.recallSeconds, sentAt: Date.now() });
+                        }
+                    }
+
+                    const cleanup = this.read<RecallState>('message-cleanup');
+
+                    if (cleanup) {
+                        const originalCleanup = JSON.stringify(cleanup);
+                        expireRecalls(cleanup, state, Date.now());
+
+                        if (JSON.stringify(cleanup) !== originalCleanup) { this.write('message-cleanup', cleanup); }
+                    }
+
                     const writes = this.pending;
                     this.pending = undefined;
 
@@ -128,7 +144,7 @@ export class BuckshotRoom extends StoredObject {
                     this.pending = undefined;
                     this.encoded = undefined;
 
-                    if (state) { await this.setWake(state, this.index.dirty(state)); }
+                    await this.setWake(state, state ? this.index.dirty(state) : false);
                 }
             });
             this.latestState = state;
@@ -143,11 +159,13 @@ export class BuckshotRoom extends StoredObject {
         return completed.result;
     }
 
-    private async setWake(s: RoomState, dirty: boolean): Promise<void> {
-        const now = Date.now(), wakes = [localWake(s), this.journal.nextDue(), this.statisticsJournal.nextDue()].filter((n): n is number => n !== null);
+    private async setWake(s: RoomState | undefined, dirty: boolean): Promise<void> {
+        const recallDue = nextRecall(this.read<RecallState>('message-cleanup'));
+        const now = Date.now(), fallback = recallDue === null ? null : recallDue + 30000 > now ? recallDue + 30000 : now + 60000;
+        const wakes = [s ? localWake(s) : null, fallback, this.journal.nextDue(), this.statisticsJournal.nextDue()].filter((n): n is number => n !== null);
         const local = wakes.length ? Math.min(...wakes) : null;
         // 同一批待办共用首次到期时间，确认消息不反复将恢复 Alarm 后移几毫秒。
-        const firstDue = s.indexDue != null && s.indexDue <= now && s.indexDue + 60000 > now ? s.indexDue : now;
+        const firstDue = s?.indexDue != null && s.indexDue <= now && s.indexDue + 60000 > now ? s.indexDue : now;
         const due = dirty ? Math.min(local ?? Infinity, firstDue + 60000) : local;
         const current = await this.ctx.storage.getAlarm();
 
@@ -155,6 +173,96 @@ export class BuckshotRoom extends StoredObject {
     }
 
     async refreshSchedule(): Promise<void> { await this.change(() => { }); }
+
+    private registerMessage(bot: string, scope: string, receipt: RecallReceipt): void {
+        const state = this.read<RecallState>('message-cleanup') ?? { bot, scope, jobs: [] };
+        requireRule(state.bot === bot && state.scope === scope, '消息清理范围不符');
+        registerRecall(state, receipt);
+        this.write('message-cleanup', state);
+    }
+
+    recallDue(): number | null { return nextRecall(this.read<RecallState>('message-cleanup')); }
+
+    async messageSent(bot: string, scope: string, receipt: RecallReceipt, panel?: PanelReceipt): Promise<number | null> {
+        await this.change(() => {
+            const s = this.read<RoomState>('room');
+
+            if (panel) {
+                const cleanup = this.read<RecallState>('message-cleanup');
+
+                if (cleanup) {
+                    const before = JSON.stringify(cleanup);
+                    completeChoices(cleanup, receipt, true);
+
+                    if (JSON.stringify(cleanup) !== before) { this.write('message-cleanup', cleanup); }
+                }
+
+                const discarded = this.rememberPanel(s, panel);
+
+                for (const messageId of discarded) { this.registerMessage(bot, scope, { ...receipt, messageId, key: 'oldPanel', kind: undefined, until: undefined }); }
+            } else { this.registerMessage(bot, scope, receipt); }
+        });
+
+        return this.recallDue();
+    }
+
+    async claimRecalls(limit = 12) {
+        requireRule(Number.isInteger(limit) && limit >= 1 && limit <= 12, '清理批次无效');
+
+        return this.change(() => {
+            const state = this.read<RecallState>('message-cleanup');
+
+            if (!state) { return []; }
+
+            const now = Date.now();
+            expireRecalls(state, this.read<RoomState>('room'), now);
+            const exhausted = state.jobs.filter(j => j.due <= now && j.attempts >= 3);
+
+            for (const job of exhausted) { this.plugin.logger.warn('消息撤回重试已用尽', { key: job.key, gameId: job.gameId, message: job.messageId.slice(-8), attempts: job.attempts, code: 'RECALL_LEASE_EXHAUSTED' }); }
+
+            state.jobs = state.jobs.filter(j => !exhausted.includes(j));
+            const jobs = state.jobs.filter(j => j.due <= now).slice(0, limit);
+
+            for (const job of jobs) {
+                job.attempts++;
+                job.lease = crypto.randomUUID();
+                job.due = now + 30000;
+            }
+
+            if (jobs.length || exhausted.length) { this.write('message-cleanup', state); }
+
+            return structuredClone(jobs);
+        });
+    }
+
+    async recallsDone(results: { messageId: string; target: string; lease: string; ok: boolean }[]): Promise<number | null> {
+        await this.change(() => {
+            const state = this.read<RecallState>('message-cleanup');
+
+            if (!state) { return; }
+
+            let changed = false;
+            state.jobs = state.jobs.filter(job => {
+                const result = results.find(r => r.messageId === job.messageId && r.target === job.target && r.lease === job.lease);
+
+                if (!result) { return true; }
+
+                changed = true;
+
+                if (result.ok || job.attempts >= 3) { return false; }
+
+                job.lease = undefined;
+                job.due = Date.now() + (job.attempts === 1 ? 10000 : 30000);
+                job.kind = undefined;
+
+                return true;
+            });
+
+            if (changed) { this.write('message-cleanup', state); }
+        });
+
+        return this.recallDue();
+    }
 
     async create(input: CreateInput, name?: string, nameLookupAt = 0, replayBase?: string) {
         validateChallenge(input);
@@ -274,7 +382,7 @@ export class BuckshotRoom extends StoredObject {
 
             if ('error' in outcome) { return { error: outcome.error, room: view(this.state(request.gameId)) }; }
 
-            return { work: this.prepareWork(this.state(request.gameId), true, request.action.type !== 'confirmQuit') };
+            return { work: this.prepareWork(this.state(request.gameId), true, !['confirmQuit', 'confirmClose'].includes(request.action.type)) };
         });
 
         if (result.error) {
@@ -336,7 +444,7 @@ export class BuckshotRoom extends StoredObject {
             const previousSeq = s.seq, recorded = s.replay?.version === 5 ? safeAction(s, action as unknown as Record<string, unknown>, request.actor) : action.type === 'play' ? action.move : { type: action.type };
             mutate(s, { ...request, action }, admin, Date.now());
 
-            if (!repeatedReady && !['confirmQuit', 'retry', 'reconcile'].includes(action.type) && !(action.type === 'start' && s.status === 'PREPARING')) { this.recordStep(s, recorded, request.actor, previousSeq); }
+            if (!repeatedReady && !['confirmQuit', 'confirmClose', 'retry', 'reconcile'].includes(action.type) && !(action.type === 'start' && s.status === 'PREPARING')) { this.recordStep(s, recorded, request.actor, previousSeq); }
 
             value = view(s);
             this.write('room', s);
@@ -402,6 +510,15 @@ export class BuckshotRoom extends StoredObject {
                 this.write('room', s);
             }
         }, true);
+
+        const cleanup = this.read<RecallState>('message-cleanup'), recallDue = nextRecall(cleanup);
+
+        if (cleanup && recallDue !== null && recallDue <= Date.now() && this.read<number>('cleanup-published') !== recallDue) {
+            try {
+                await this.plugin.db.run('INSERT INTO {coord_ops}(bot,id,game_id,request,state,expires_at) VALUES(?,?,?,?,?,?) ON CONFLICT(bot,game_id,id) DO UPDATE SET expires_at=excluded.expires_at', cleanup.bot, cleanup.scope, 'message-cleanup', '{}', 'CLEANUP', recallDue);
+                this.write('cleanup-published', recallDue);
+            } catch { this.plugin.logger.warn('消息清理索引等待恢复', { code: 'RECALL_INDEX_PENDING' }); }
+        }
 
         try { await this.statisticsJournal.publish(this.plugin.db); } catch { this.plugin.logger.warn('统计发布未确认，保留原摘要等待重试'); }
 
@@ -488,6 +605,17 @@ export class BuckshotRoom extends StoredObject {
             } else if (['FINISHED', 'SETTLING', 'SETTLED', 'CANCELLED', 'CLOSED'].includes(s.status)) { discarded.push(...this.retirePanel(s)); }
         }
 
+        if (outcome === 'SENT' && task.kind === 'message') {
+            const sent = task.sentAt ?? Date.now();
+            const reading = !task.private && task.loadId === s.game?.loadId && s.game?.players.find(p => p.id === s.game?.current)?.ai ? s.config.values.aiReadSeconds : 0;
+
+            if (!task.keep && messageId) {
+                this.registerMessage(s.botId, s.groupId, { messageId, target: task.private ? 'c2c:' + task.target : task.target, key: task.parts?.[0]?.key ?? 'message', gameId: s.gameId, seconds: Math.max(s.config.values.recallSeconds, reading), sentAt: sent });
+            }
+
+            for (const id of discarded) { this.registerMessage(s.botId, s.groupId, { messageId: id, target: s.groupId, key: 'oldPanel', gameId: s.gameId, seconds: s.config.values.recallSeconds, sentAt: sent }); }
+        }
+
         if (outcome !== 'SENT' && task.critical) {
             s.recovery = true;
             s.reason = '关键消息投递失败或结果未知';
@@ -509,7 +637,16 @@ export class BuckshotRoom extends StoredObject {
     private prepareWork(s: RoomState, claim: boolean, immediateAI = false) {
         this.tick(s, Date.now(), immediateAI);
 
-        return prepareDelivery(s, claim);
+        const cleanup = this.read<RecallState>('message-cleanup');
+
+        if (cleanup) {
+            const before = JSON.stringify(cleanup);
+            expireRecalls(cleanup, s, Date.now());
+
+            if (JSON.stringify(cleanup) !== before) { this.write('message-cleanup', cleanup); }
+        }
+
+        return { ...prepareDelivery(s, claim), recallDue: this.recallDue() };
     }
 
     async work(gameId?: string, ack?: { id: string; lease: string; outcome: 'SENT' | 'FAILED' | 'UNKNOWN'; messageId?: string; errorCode?: string; sentAt?: number }, claim = true, immediateAI = false) {

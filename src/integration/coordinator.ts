@@ -1,6 +1,7 @@
+import { cleanupSoon, recoverMessages } from '../templates/cleanup.js';
 import { validateChallenge } from '../game/random.js';
 import { targetFor, validateConversation } from '../conversation.js';
-import { recallLater, waitForTime } from '../templates/send.js';
+import { waitForTime } from '../templates/send.js';
 import type { PluginContext, Session } from '@qqbot/sdk';
 import type { BuckshotRoom } from '../room/durable.js';
 import type { BuckshotPlayerRegistry } from '../room/registry.js';
@@ -153,6 +154,8 @@ export async function drain(ctx: PluginContext, group: string, session?: Session
         if (!work.task) { work = await room.work(work.gameId, undefined, Date.now() < deadline, true); }
     }
 
+    if (work) { cleanupSoon(ctx, group, work.recallDue); }
+
     let panelHandled = false;
 
     // 前四条沿用事件凭据；连续行动余下消息使用已有的主动发送权限，给宿主返回值留一条被动额度。
@@ -198,12 +201,6 @@ export async function drain(ctx: PluginContext, group: string, session?: Session
                 errorCode = result.ok ? undefined : `HTTP_${result.status}:QQ_${result.code ?? 'NONE'}`;
                 outcome = result.ok && !!messageId ? 'SENT' : result.status >= 400 && result.status < 500 ? 'FAILED' : 'UNKNOWN';
 
-                if (outcome === 'SENT' && !task.keep) {
-                    const game = work.room.game;
-                    const reading = !task.private && task.loadId === game?.loadId && game?.players.find(p => p.id === game.current)?.ai ? work.aiReadSeconds : 0;
-                    recallLater(ctx, target.scene === 'c2c' ? 'c2c:' + target.id : target.id, messageId!, { gameId: work.gameId, taskId: task.id, loadId: task.loadId }, Math.max(work.recallSeconds, reading), sentAt);
-                }
-
                 if (task.panel) { panelHandled = true; }
             }
         } catch {
@@ -222,7 +219,7 @@ export async function drain(ctx: PluginContext, group: string, session?: Session
 
         work = await room.work(work.gameId, { id: task.id, lease: task.lease!, outcome, messageId, errorCode, sentAt }, budget.remaining > 0 && Date.now() < deadline, true);
 
-        for (const id of work?.discardPanels ?? []) { recallLater(ctx, group, id, { gameId: work!.gameId }, work!.recallSeconds); }
+        if (work) { cleanupSoon(ctx, group, work.recallDue); }
 
         if (options.foreground && outcome === 'SENT' && work && (work.task || work.resumeAt !== undefined || work.moneyDue || work.release.length || work.closeEmpty || work.pendingReleases.length)) {
             // 复用已经领取的下一任务、事件凭据和同一个时间预算，后台不重放动作、不增加轮询。
@@ -255,6 +252,7 @@ export async function drain(ctx: PluginContext, group: string, session?: Session
 
 export async function cron(ctx: PluginContext): Promise<void> {
     const stopAt = Date.now() + 20000;
+    ctx.waitUntil(recoverMessages(ctx));
     await ctx.db.run('DELETE FROM {coord_ops} WHERE rowid IN (SELECT rowid FROM {coord_ops} WHERE bot=? AND state IN (?,?) AND expires_at<=? LIMIT 20)', ctx.botId, 'CREATE_READY', 'NAVIGATION', Date.now());
     const pending = await ctx.db.all<{ request: string }>('SELECT request FROM {coord_ops} WHERE bot=? AND state=? LIMIT 4', ctx.botId, 'PENDING');
 
