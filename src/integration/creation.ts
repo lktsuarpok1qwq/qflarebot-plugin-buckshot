@@ -27,6 +27,7 @@ export async function prepareCreate(ctx: PluginContext, session: Session, args: 
     requireRule(args.length <= 3 && mode && Number.isSafeInteger(stake) && stake >= 0 && difficulty >= 0, '创建参数无效，发送 /恶魔轮盘 帮助');
     validateConversation(scopeFor(session), mode, session.userId);
     const config = snapshot ?? await configuration(ctx, session, request);
+    requireRule(!challenge || config.values.dailyEnabled, '每日挑战暂未开放');
     requireRule(stake ? config.values.stakesEnabled && stake >= config.values.minStake && stake <= config.values.maxStake : config.values.freeEnabled, '模式未启用或金额超出范围');
     requireRule(!stake || mode !== 'solo' || payout(stake, config.values.multipliers[difficulty]) <= 1e12 && payout(stake, config.values.multipliers[difficulty]) - stake <= config.values.rewardLimit, '返还或奖励超出上限');
     const gameId = crypto.randomUUID(), expiresAt = Date.now() + 600000;
@@ -81,16 +82,16 @@ export async function chooseCreation(ctx: PluginContext, session: Session, args:
     const input = { ...values, min: formatPoints(cfg.minStake), max: formatPoints(cfg.maxStake), command: prefix + ' 积分 金额' };
     const amountButtons = { draftAmount: prefix + ' 积分 ', ...back };
 
-    if (fee === '积分' && amount === undefined) { return renderMessage(templates, 'setupAmount', { values: input, dynamic: amountButtons }); }
+    if (fee === '积分' && amount === undefined) { return renderMessage(templates, 'setupAmount', { scene: session.scene === 'group' ? 'group' : 'c2c', actor: session.userId, values: input, dynamic: amountButtons }); }
 
     let amountMinor = 0;
 
     if (fee === '积分') {
         try { amountMinor = parsePoints(amount); } catch {
-            return renderMessage(templates, 'setupAmount', { values: input, dynamic: amountButtons, notice: 'setupAmountInvalid' });
+            return renderMessage(templates, 'setupAmount', { scene: session.scene === 'group' ? 'group' : 'c2c', actor: session.userId, values: input, dynamic: amountButtons, notice: 'setupAmountInvalid' });
         }
 
-        if (amountMinor < cfg.minStake || amountMinor > cfg.maxStake) { return renderMessage(templates, 'setupAmount', { values: input, dynamic: amountButtons, notice: 'setupAmountInvalid' }); }
+        if (amountMinor < cfg.minStake || amountMinor > cfg.maxStake) { return renderMessage(templates, 'setupAmount', { scene: session.scene === 'group' ? 'group' : 'c2c', actor: session.userId, values: input, dynamic: amountButtons, notice: 'setupAmountInvalid' }); }
     }
 
     const stake = fee === '免费' ? '免费' : formatPoints(amountMinor);
@@ -109,6 +110,8 @@ export async function prepareChallenge(ctx: PluginContext, session: Session, arg
     const config = await configuration(ctx, session, request), date = challengeDate();
 
     if (!config.values.freeEnabled) { return renderMessage(templates, 'setupBlocked', { values: { mode: 'Solo' }, reason: 'setupFreeDisabled', dynamic: { draftBack: '/恶魔轮盘 新建 单人' } }); }
+
+    requireRule(config.values.dailyEnabled, '每日挑战暂未开放');
 
     const challenge = await registryFor(ctx, session.userId).dailyChallenge(date, session.userId);
 

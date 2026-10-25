@@ -20,7 +20,7 @@ export interface ReplayHeader {
     format: 'buckshot-replay'; version: 5;
     adminAI?: [string, import('../game/personality.js').Personality][];
     game: { id: string; mode: string; challengeDate?: string; dailyRewardMinor?: number; difficulty?: number; startedAt: string; endedAt?: string; scene: 'group' | 'c2c'; stakeMinor?: number; winner?: string };
-    config?: { turnSeconds?: number; multiplier?: number }; players: ReplayPlayer[]; integrity: { complete: boolean; reason?: string };
+    config?: { turnSeconds?: number; readSeconds?: number; multiplier?: number }; players: ReplayPlayer[]; integrity: { complete: boolean; reason?: string };
 }
 export interface ReplayFile extends ReplayHeader { steps: ReplayWireStep[] }
 
@@ -39,7 +39,7 @@ export function replayPrefix(bot: string) { return `replays/bs1/${encodeURICompo
 export function replayKey(s: RoomState) {
     const started = s.statistics?.startedAt ?? s.createdAt, part = dateParts(started), reverse = String(9999999999999 - started).padStart(13, '0');
 
-    return `${replayPrefix(s.botId)}${part.date}/${reverse}_${part.time.replaceAll(':', '')}_${s.mode}_${s.gameId}_${crypto.randomUUID().replaceAll('-', '')}.bs`;
+    return `${replayPrefix(s.botId)}${part.date}/${reverse}_${part.time.replaceAll(':', '')}_${s.mode}_${s.gameId}_${crypto.randomUUID().replaceAll('-', '')}${s.challenge ? '_daily' : ''}.bs`;
 }
 
 export function playerId(s: RoomState, id?: string | null): string | undefined {
@@ -64,7 +64,7 @@ function refreshPlayers(s: RoomState): void {
 
 export function replayHeader(s: RoomState): ReplayHeader {
     refreshPlayers(s);
-    const c = s.config.values, config = { ...(c.turnSeconds !== 60 ? { turnSeconds: c.turnSeconds } : {}), ...(s.stake && s.mode === 'solo' ? { multiplier: c.multipliers[s.difficulty] / 1000 } : {}) };
+    const c = s.config.values, config = { readSeconds: c.aiReadSeconds, ...(c.turnSeconds !== 60 ? { turnSeconds: c.turnSeconds } : {}), ...(s.stake && s.mode === 'solo' ? { multiplier: c.multipliers[s.difficulty] / 1000 } : {}) };
 
     return {
         format: 'buckshot-replay', version: 5,

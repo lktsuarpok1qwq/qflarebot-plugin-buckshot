@@ -3,7 +3,7 @@ import { DEFAULT_CONFIGURATION } from './templates/reply-config.js';
 import { bindPreviousNavigation, deliver, renderMessage } from './templates/send.js';
 import { ERROR_KEYS } from './templates/replies.js';
 import type { ReplyConfiguration } from './templates/reply-config.js';
-import { definePlugin } from '@qqbot/sdk';
+import { definePlugin, type Session } from '@qqbot/sdk';
 import { BuckshotRoom } from './room/durable.js';
 import { BuckshotPlayerRegistry } from './room/registry.js';
 import { adminRoutes } from './admin/routes.js';
@@ -13,7 +13,7 @@ import { ensureDatabase, type RequestConfig } from './integration/database.js';
 
 export { BuckshotRoom, BuckshotPlayerRegistry };
 
-function failure(error: unknown, templates: ReplyConfiguration) { return renderMessage(templates, 'error', { values: { message: error instanceof Error ? ERROR_KEYS[error.message] ?? 'unknownError' : 'unknownError' } }); }
+function failure(error: unknown, templates: ReplyConfiguration, session: Session) { return renderMessage(templates, 'error', { scene: session.scene === 'group' ? 'group' : 'c2c', actor: session.userId, values: { message: error instanceof Error ? ERROR_KEYS[error.message] ?? 'unknownError' : 'unknownError' } }); }
 
 export default definePlugin({
     name: 'buckshot', displayName: '恶魔轮盘', description: '群聊单人及多人对局、私聊单人 AI', apiVersion: 4,
@@ -28,7 +28,7 @@ export default definePlugin({
             const requestConfig: RequestConfig = {};
             let message;
 
-            try { message = await command(ctx, session, [name.slice(5), argText].filter(Boolean).join(' '), templates, requestConfig); } catch (error) { message = failure(error, templates); }
+            try { message = await command(ctx, session, [name.slice(5), argText].filter(Boolean).join(' '), templates, requestConfig); } catch (error) { message = failure(error, templates, session); }
 
             await deliver(ctx, session, message, requestConfig);
         }
@@ -53,7 +53,7 @@ export default definePlugin({
                 message = await interact(ctx, session, input, templates, requestConfig);
 
                 if (input.navigation) { bindPreviousNavigation(message, input.navigation); }
-            } catch (error) { message = failure(error, templates); }
+            } catch (error) { message = failure(error, templates, session); }
 
             await deliver(ctx, session, message, requestConfig);
         }

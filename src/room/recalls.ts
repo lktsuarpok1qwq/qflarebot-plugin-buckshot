@@ -8,12 +8,18 @@ export interface RecallReceipt {
 export interface RecallJob extends RecallReceipt { due: number; attempts: number; lease?: string }
 export interface RecallState { bot: string; scope: string; jobs: RecallJob[] }
 
-export function completeChoices(state: RecallState, receipt: RecallReceipt, panel = false): void {
+export function completeChoices(state: RecallState, receipt: RecallReceipt, panel = false): boolean {
+    let changed = false;
+
     for (const job of state.jobs) {
         if (job.kind && job.owner === receipt.owner && job.target === receipt.target && (receipt.kind || panel || receipt.previous && receipt.previous === job.navigation)) {
-            job.due = Math.min(job.due, receipt.sentAt + job.seconds * 1000);
+            const due = Math.min(job.due, receipt.sentAt + job.seconds * 1000);
+            changed ||= due !== job.due;
+            job.due = due;
         }
     }
+
+    return changed;
 }
 
 // 回执独立于当前对局保存，关房和新开房不丢弃旧消息；只保存待办，不保存消息正文。
@@ -27,7 +33,9 @@ export function registerRecall(state: RecallState, receipt: RecallReceipt): void
     state.jobs.push({ ...receipt, due: (receipt.until ?? receipt.sentAt) + receipt.seconds * 1000, attempts: 0 });
 }
 
-export function expireRecalls(state: RecallState, room: RoomState | undefined, now: number): void {
+export function expireRecalls(state: RecallState, room: RoomState | undefined, now: number): boolean {
+    let changed = false;
+
     for (const job of state.jobs) {
         if (!job.kind || job.lease) { continue; }
 
@@ -38,8 +46,14 @@ export function expireRecalls(state: RecallState, room: RoomState | undefined, n
                     : job.kind === 'quit' ? !same || room!.status !== 'PLAYING' || room!.confirmations[job.owner ?? '']?.version !== job.version || room!.version !== job.version
                         : false;
 
-        if (completed) { job.due = Math.min(job.due, now + job.seconds * 1000); }
+        if (completed) {
+            const due = Math.min(job.due, now + job.seconds * 1000);
+            changed ||= due !== job.due;
+            job.due = due;
+        }
     }
+
+    return changed;
 }
 
 export function nextRecall(state?: RecallState): number | null {

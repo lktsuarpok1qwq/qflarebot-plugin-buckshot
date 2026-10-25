@@ -59,19 +59,24 @@ export function chooseSearch(view: AIView, budgetMs: number, diagnostics?: { nod
         return result;
     };
     const probability = (s: Position) => distribution(s.shells).p;
-    const hands = new WeakMap<Item[], { key: string; used: Map<Item, Item[]> }>();
+    const values: Partial<Record<Item, number>> = { glass: 2.4, beer: 1.5, cigarette: 3.5, saw: 4, cuffs: 4, jammer: 4, inverter: 3, medicine: 1.2, adrenaline: 5, phone: 1.5 };
+    const hands = new WeakMap<Item[], { key?: string; used?: Map<Item, Item[]>; items?: Set<Item>; score?: number }>();
     const hand = (values: Item[]) => {
         let result = hands.get(values);
 
         if (!result) {
-            result = { key: [...values].sort().join(','), used: new Map() };
+            result = {};
             hands.set(values, result);
         }
 
         return result;
     };
+    const inventoryScore = (items: Item[]) => hand(items).score ??= items.reduce((sum, item) => sum + (values[item] || 0), 0);
+    const inventoryKey = (items: Item[]) => hand(items).key ??= [...items].sort().join(',');
+    const inventoryItems = (items: Item[]) => hand(items).items ??= new Set(items);
     const consume = (values: Item[], item: Item) => {
         const entry = hand(values);
+        entry.used ??= new Map();
         let result = entry.used.get(item);
 
         if (!result) {
@@ -124,7 +129,7 @@ export function chooseSearch(view: AIView, budgetMs: number, diagnostics?: { nod
         for (const steal of [true, false]) {
             if (steal && !s.hands[a].includes('adrenaline')) { continue; }
 
-            for (const item of new Set(s.hands[steal ? b : a])) {
+            for (const item of inventoryItems(s.hands[steal ? b : a])) {
                 if (item === 'saw' && !s.saw && p > 0
                     || item === 'inverter' && p < 1
                     || item === 'beer' && (p > 0 && (p < 1 || level === 4) || p === 0 && s.saw)
@@ -150,16 +155,12 @@ export function chooseSearch(view: AIView, budgetMs: number, diagnostics?: { nod
 
     if (phone && initial.shells.some(mask => (mask ^ initial.shells[0]) & 126)) { return translate(phone); }
 
-    const values: Partial<Record<Item, number>> = { glass: 2.4, beer: 1.5, cigarette: 3.5, saw: 4, cuffs: 4, jammer: 4, inverter: 3, medicine: 1.2, adrenaline: 5, phone: 1.5 };
-
     function evaluate(s: Position): number {
         if (s.hp[0] <= 0) { return -100; }
 
         if (s.hp[1] <= 0) { return 100; }
 
-        const hand = (i: number) => s.hands[i].reduce((sum, item) => sum + (values[item] || 0), 0);
-
-        return Math.max(-99, Math.min(99, (s.hp[0] - s.hp[1]) * 10 + hand(0) - hand(1) + (s.actor === 0 ? 1 : -1) * policy.tempo
+        return Math.max(-99, Math.min(99, (s.hp[0] - s.hp[1]) * 10 + inventoryScore(s.hands[0]) - inventoryScore(s.hands[1]) + (s.actor === 0 ? 1 : -1) * policy.tempo
             + (s.control[1] === 1 ? 5 : 0) - (s.control[0] === 1 ? 5 : 0)));
     }
 
@@ -255,7 +256,7 @@ export function chooseSearch(view: AIView, budgetMs: number, diagnostics?: { nod
 
         if (nodes >= policy.nodes || performance.now() - started >= budgetMs) { throw exhausted; }
 
-        const key = `${depth}|${s.remaining}|${s.actor}|${+s.saw}|${s.hp.join(',')}|${s.control.join(',')}|${hand(s.hands[0]).key}|${hand(s.hands[1]).key}|${distribution(s.shells).key}`, previous = cache.get(key);
+        const key = `${depth}|${s.remaining}|${s.actor}|${+s.saw}|${s.hp.join(',')}|${s.control.join(',')}|${inventoryKey(s.hands[0])}|${inventoryKey(s.hands[1])}|${distribution(s.shells).key}`, previous = cache.get(key);
 
         if (previous !== undefined) { return previous; }
 

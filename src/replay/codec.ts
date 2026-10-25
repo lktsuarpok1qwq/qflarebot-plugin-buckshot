@@ -10,7 +10,7 @@ export function createReplayCodec() {
     const statuses = ['WAITING', 'PREPARING', 'PLAYING', 'FINISHED', 'SETTLING', 'SETTLED', 'CANCELLED', 'CLOSED'];
     const results = [
         ['load', ['count', 'live', 'blank']], ['shot', ['actor', 'target', 'shell']], ['item', ['actor', 'item', 'target']], ['steal', ['actor', 'target', 'item']],
-        ['skip', ['name']], ['eject', ['shell']], ['eliminate', ['name']], ['timeout', ['name']], ['timeoutEliminate', ['name']], ['finish', ['name']], ['noWinner', ['name']], ['intel', ['loadId', 'position', 'shell']], ['noIntel', []]
+        ['skip', ['name']], ['eject', ['shell']], ['eliminate', ['name']], ['timeout', ['name']], ['timeoutEliminate', ['name']], ['finish', ['name']], ['noWinner', ['name']], ['intel', ['loadId', 'position', 'shell']], ['noIntel', []], ['matchCancelled', []]
     ] as const;
     const fail = (): never => { throw Error('回放紧凑编码无效'); };
     const trim = (v: unknown[]) => {

@@ -43,9 +43,11 @@ export function blockClock(s: RoomState, now: number): void {
 }
 
 export function clock(s: RoomState, now: number): void {
+    if (s.resultUntil !== undefined && s.resultUntil <= now) { s.resultUntil = undefined; }
+
     if (s.aiReadUntil !== undefined && s.aiReadUntil <= now) { s.aiReadUntil = undefined; }
 
-    if (s.status !== 'PLAYING' || s.paused || s.recovery || s.aiReadUntil !== undefined || s.outbox.some(t => t.critical && t.state !== 'SENT')) {
+    if (s.status !== 'PLAYING' || s.paused || s.recovery || s.aiReadUntil !== undefined || s.resultUntil !== undefined || s.outbox.some(t => t.critical && t.state !== 'SENT' || t.kind === 'recall' && ['PENDING', 'SENDING'].includes(t.state))) {
         blockClock(s, now);
 
         return;
@@ -78,7 +80,9 @@ export function events(s: RoomState, values: GameEvent[], oldTurn: number, now: 
     let summary: import('../templates/presentation.js').Part[] = [];
     const flush = () => {
         if (summary.length) {
-            enqueue(s, '', true).parts = summary;
+            const task = enqueue(s, '', true);
+            task.parts = summary;
+            task.actionResult = true;
             summary = [];
         }
     };
@@ -91,6 +95,7 @@ export function events(s: RoomState, values: GameEvent[], oldTurn: number, now: 
 
             if (member) {
                 const task = enqueue(s, event.text, true, member.privateId, event.loadId);
+                task.actionResult = true;
                 task.parts = [{ ...event.message!, values: { ...event.message!.values, gameId: s.gameId } }];
             }
         } else if (event.type !== 'load' && event.type !== 'finish') {
@@ -113,7 +118,7 @@ export function events(s: RoomState, values: GameEvent[], oldTurn: number, now: 
             s.reminderSent = false;
         }
 
-        if (oldTurn === -1 || s.game!.current !== oldCurrent) { enqueue(s, '', true, undefined, undefined, true); }
+        if (oldTurn === -1 || s.game!.current !== oldCurrent || values.some(e => e.type === 'load') || !s.game!.players.find(p => p.id === s.game!.current)!.ai) { enqueue(s, '', true, undefined, undefined, true); }
 
         blockClock(s, now);
     }
@@ -213,6 +218,8 @@ export function cancelGame(s: RoomState, now: number): void {
     }
 
     settlement(s);
+
+    if (s.game) { enqueue(s, '', true).parts = [{ key: 'matchCancelled', values: { ...(s.replay ? { replayUrl: replayLink(s.replay.key, s.replay.base) } : {}) } }]; }
 }
 
 export function mutate(s: RoomState, request: Request, admin: boolean, now: number): void {
@@ -221,7 +228,7 @@ export function mutate(s: RoomState, request: Request, admin: boolean, now: numb
 
     if (['pause', 'resume', 'cancel', 'retry', 'removed', 'abort', 'reconcile'].includes(a.type)) { requireRule(admin, '仅管理入口允许此操作'); } else { requireRule(!s.paused && !s.recovery, '房间已暂停或等待恢复'); }
 
-    requireRule(s.status !== 'WAITING' || now < s.createdAt + 600000 || admin, '等待房间已到期');
+    requireRule(s.status !== 'WAITING' || now < s.createdAt + s.config.values.waitingMinutes * 60000 || admin, '等待房间已到期');
     requireRule(!s.reserved || s.reserveUntil! > now || admin, '本金预留已到期，等待善后');
     const member = s.members.find(p => p.id === id);
 
@@ -275,7 +282,7 @@ export function mutate(s: RoomState, request: Request, admin: boolean, now: numb
         requireRule(s.status === 'WAITING' && member && s.host === id, '仅等待中的房主可以关闭房间');
 
         if (a.type === 'confirmClose') {
-            s.closeConfirmation = { actor: id, version: s.version + 1, expires: now + 30000 };
+            s.closeConfirmation = { actor: id, version: s.version + 1, expires: now + s.config.values.confirmSeconds * 1000 };
         } else {
             requireRule(s.closeConfirmation?.actor === id && s.closeConfirmation.version === s.version && s.closeConfirmation.expires > now, '请重新确认关闭房间');
             requireRule(!s.reserved && s.money.length === 0, '资金状态待核对，暂不能关闭');
@@ -284,7 +291,7 @@ export function mutate(s: RoomState, request: Request, admin: boolean, now: numb
         }
     } else if (a.type === 'confirmQuit') {
         requireRule(member && s.status === 'PLAYING', '当前不能认输');
-        s.confirmations[id] = { version: s.version + 1, expires: now + 30000 };
+        s.confirmations[id] = { version: s.version + 1, expires: now + s.config.values.confirmSeconds * 1000 };
     } else if (a.type === 'removed' && s.status === 'PREPARING') {
         requireRule(s.members.some(m => m.id === a.target), '玩家不在本局');
         s.departures = [...new Set([...(s.departures ?? []), a.target])];
@@ -382,7 +389,7 @@ export function tick(s: RoomState, now: number, immediateAI = false, onAction?: 
         }
     }
 
-    if (s.status === 'WAITING' && now >= s.createdAt + 600000) {
+    if (s.status === 'WAITING' && now >= s.createdAt + s.config.values.waitingMinutes * 60000) {
         s.status = 'CANCELLED';
         s.version++;
     }
@@ -416,10 +423,10 @@ export function tick(s: RoomState, now: number, immediateAI = false, onAction?: 
         s.game = result.game;
         s.version++;
         events(s, result.events, oldTurn, now, oldCurrent);
-    } else if (!s.reminderSent && s.deadline - now <= 15000) {
-        const reminder = enqueue(s, '操作时间剩余 15 秒');
+    } else if (s.config.values.reminderSeconds > 0 && !s.reminderSent && s.deadline - now <= s.config.values.reminderSeconds * 1000) {
+        const reminder = enqueue(s, '');
         reminder.expiresAt = s.deadline;
-        reminder.parts = [{ key: 'reminder', values: {} }];
+        reminder.parts = [{ key: 'reminder', values: { seconds: String(s.config.values.reminderSeconds) } }];
         s.reminderSent = true;
     }
 }
@@ -432,8 +439,10 @@ export function view(s: RoomState) {
     return {
         ...(s.challenge ? { challengeDate: s.challenge.date, dailyReward: s.config.values.dailyReward } : {}), ...(s.aiPersonality ? { aiPersonality: s.aiPersonality } : {}),
         gameId: s.gameId, groupId: s.groupId, version: s.version, status: s.status, mode: s.mode, stake: s.stake, difficulty: s.difficulty,
+        ...(s.stake && s.mode === 'solo' ? { winReturn: payout(s.stake, s.config.values.multipliers[s.difficulty]) } : {}),
         opponents: (s.opponents ?? []).map(({ id, name, difficulty, personality }) => ({ id, name, difficulty, ...(s.config.values.showAIStyle ? { personality } : {}) })),
-        showAIStyle: s.config.values.showAIStyle === true, recallSeconds: s.config.values.recallSeconds, host: s.host, members: s.members.map(({ id, name, ready, claimId, nameLookupAt }) => ({ id, name, ready, ...(claimId !== undefined ? { claimId } : {}), ...(nameLookupAt !== undefined ? { nameLookupAt } : {}) })), paused: s.paused, recovery: s.recovery,
+        confirmSeconds: s.config.values.confirmSeconds, actionWaiting: s.status === 'PLAYING' && (s.resultUntil ?? 0) > Date.now(),
+        reading: s.status === 'PLAYING' && s.outbox.some(t => t.parts?.some(p => p.key === 'load') && t.state !== 'SENT' || t.kind === 'recall' && ['PENDING', 'SENDING'].includes(t.state)), readingSeconds: s.config.values.aiReadSeconds, showAIStyle: s.config.values.showAIStyle === true, recallSeconds: s.config.values.recallSeconds, host: s.host, members: s.members.map(({ id, name, ready, claimId, nameLookupAt }) => ({ id, name, ready, ...(claimId !== undefined ? { claimId } : {}), ...(nameLookupAt !== undefined ? { nameLookupAt } : {}) })), paused: s.paused, recovery: s.recovery,
         ...(s.reason !== undefined ? { reason: s.reason } : {}), ...(s.deadline !== undefined ? { deadline: s.deadline } : {}), remainingMs: s.remainingMs, ...(s.aiReadUntil !== undefined ? { aiReadUntil: s.aiReadUntil } : {}), ...(s.game ? { game: publicGame(s.game) } : {}),
         tasks: pendingTasks(s),
         funds: s.money.map(({ id, kind, state }) => ({ id, kind, state }))

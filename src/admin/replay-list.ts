@@ -1,14 +1,15 @@
+import { replayQueryScript } from './replay-query.js';
 import { replayMenuStyle, replayMenuScript } from './replay-menu.js';
 
 export const replayListStyle = replayMenuStyle + String.raw`
-.replay-record{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px;padding:16px 0;border-top:1px solid var(--qb-border)}.replay-record>div{min-width:0}.replay-record p{margin:4px 0;overflow-wrap:anywhere}.replay-record .actions{margin:0;align-items:center}.replay-link{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:32px;padding:7px 12px;border:1px solid var(--qb-border-strong);border-radius:var(--qb-radius-full);color:var(--qb-fg);background:var(--qb-surface);text-decoration:none}.replay-link:hover{background:var(--qb-surface-muted)}.replay-primary{background:var(--qb-primary);color:var(--qb-on-primary)}.replay-primary:hover:not(:disabled){background:var(--qb-primary-hover)}.replay-danger{color:var(--qb-danger);background:var(--qb-danger-bg);border-color:var(--qb-danger)}#accept.destructive{color:var(--qb-on-danger,var(--qb-surface));background:var(--qb-danger);border-color:var(--qb-danger)}.replay-filters{display:flex;flex-wrap:wrap;align-items:center;gap:12px;margin:16px 0}.replay-filters label{display:flex;align-items:center;gap:8px;min-width:0}.replay-filters input{min-width:0;max-width:100%}.replay-copy{display:block;width:100%;margin-top:10px}#confirmText{white-space:pre-line}@media(max-width:600px){.replay-record{align-items:stretch;flex-direction:column}.replay-record .actions>*{min-height:44px}.replay-filters label{width:100%}.replay-filters input{flex:1}}
+.replay-badge{display:inline-block;padding:2px 8px;border-radius:var(--qb-radius-full);background:var(--qb-surface-muted);color:var(--qb-fg);font-size:var(--qb-text-xs)}.replay-record{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px;padding:16px 12px;border:2px solid transparent;border-top-color:var(--qb-border);border-radius:var(--qb-radius)}.replay-record.replay-selected{border-color:var(--qb-accent)}.replay-record>div{min-width:0}.replay-record p{margin:4px 0;overflow-wrap:anywhere}.replay-record .actions{margin:0;align-items:center}.replay-link{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:32px;padding:7px 12px;border:1px solid var(--qb-border-strong);border-radius:var(--qb-radius-full);color:var(--qb-fg);background:var(--qb-surface);text-decoration:none}.replay-link:hover{background:var(--qb-surface-muted)}.replay-primary{background:var(--qb-primary);color:var(--qb-on-primary)}.replay-primary:hover:not(:disabled){background:var(--qb-primary-hover)}.replay-danger{color:var(--qb-danger);background:var(--qb-danger-bg);border-color:var(--qb-danger)}#accept.destructive{color:var(--qb-on-danger,var(--qb-surface));background:var(--qb-danger);border-color:var(--qb-danger)}.replay-filters{display:flex;flex-wrap:wrap;align-items:center;gap:12px;margin:16px 0}.replay-filters label{display:flex;align-items:center;gap:8px;min-width:0}.replay-filters input{min-width:0;max-width:100%}.replay-copy{display:block;width:100%;margin-top:10px}#confirmText{white-space:pre-line}.replay-query label{display:inline-flex;align-items:center;gap:8px;min-width:0}#replayCustom:not([hidden]){display:flex;flex-wrap:wrap;gap:12px;min-width:0}#replayCustom input{min-width:0;max-width:100%}.replay-pagination{display:flex;flex-direction:column;align-items:center;gap:12px;margin-top:16px}.replay-page-controls{display:flex;align-items:center;justify-content:center;gap:10px;flex-wrap:nowrap}.replay-page-controls span{min-width:5ch;text-align:center;white-space:nowrap;line-height:1;font-variant-numeric:tabular-nums}@media(max-width:600px){.replay-record{align-items:stretch;flex-direction:column}.replay-record .actions>*{min-height:44px}.replay-filters label{width:100%}.replay-filters input{flex:1}}
 `;
 export const replayListMarkup = String.raw`
-<div class="qb-card"><div class="actions"><label>日期 <input type="date" id="replayDate"></label><button id="replayList">加载列表</button></div><p class="hint">按北京时间选择日期</p><div class="replay-filters"><label>模式 <select id="replayFilterMode"><option value="">全部</option><option value="solo">单人</option><option value="duo">双人</option><option value="multi">多人</option></select></label><label>房间 ID <input id="replayFilterId" type="search" placeholder="在已加载列表中筛选"></label><label>排序 <select id="replaySort"><option value="new">时间从晚到早</option><option value="old">时间从早到晚</option></select></label></div><p id="replayNotice" role="status">尚未加载</p><div id="replayRecords" aria-label="日期对局列表"></div></div><details id="replayAdminDetails" class="qb-card" hidden><summary>管理员对局详情</summary><p id="replayAdminStyle"></p></details>
+<div class="qb-card"><div class="actions replay-query"><label>时间 <select id="replayRange"><option value="today">今日</option><option value="week">近 7 天</option><option value="month">近 30 天</option><option value="custom">自定义</option></select></label><span id="replayCustom" hidden><label>开始 <input type="date" id="replayDate"></label><label>结束 <input type="date" id="replayEnd"></label></span><button id="replayList">查询</button></div><p id="replayRangeHint" class="hint"></p><p id="replayRangeError" class="danger" role="alert"></p><div class="replay-filters"><label>模式 <select id="replayFilterMode"><option value="">全部</option><option value="solo">单人</option><option value="duo">双人</option><option value="multi">多人</option></select></label><label>房间号 <input id="replayFilterId" type="search" placeholder="短号、#短号或完整 ID"></label><label>排序 <select id="replaySort"><option value="new">时间从晚到早</option><option value="old">时间从早到晚</option></select></label></div><p id="replayNotice" role="status">尚未查询</p><div id="replayRecords" aria-label="对局列表"></div><div class="replay-pagination"><div class="replay-page-controls" role="group" aria-label="回放分页"><button id="replayPagePrev" disabled>上一页</button><span id="replayPageCount" aria-live="polite">0 / 0</span><button id="replayPageNext" disabled>下一页</button></div><button id="replayMore" hidden>加载更多记录</button></div></div>
 `;
 export const replayListScript = replayMenuScript + String.raw`
 replayLocalStart = () => { closeReplayMenu(); replayListEpoch++; clearAdminReplay(); };
-replayLocalDone = () => showAdminReplayStyle(replayData);
+replayLocalDone = () => { showAdminReplayStyle(replayData); showReplayDetail(null); };
 
 function showAdminReplayStyle(data) {
     const styles = data.adminAI ?? [];
@@ -16,9 +17,30 @@ function showAdminReplayStyle(data) {
     $('replayAdminDetails').hidden = false;
 }
 
-let replayListEpoch = 0, replayListItems = [], replayListLoaded = false, replayListComplete = true, replayDeleting = false, replayLoadedKey = null, replayRaw = null;
+let replayListEpoch = 0, replayListItems = [], replayListLoaded = false, replayListComplete = true, replayDeleting = false, replayLoadedKey = null, replayRaw = null, replayNextCursor = null, replayPageIndex = 0, replayPageTotal = 0, replaySelectedKey = null, replayReturnScroll = 0;
+
+function showReplayDetail(key) {
+    replaySelectedKey = key;
+    replayReturnScroll = window.scrollY;
+    $('replayBrowse').hidden = true;
+    $('replayDetail').hidden = false;
+    $('replayBack').focus({ preventScroll: true });
+    $('replayDetail').scrollIntoView({ block: 'start' });
+}
+
+$('replayBack').onclick = () => {
+    clearAdminReplay(false);
+    renderReplayList();
+    const row = [...$('replayRecords').children].find(r => r.dataset.key === replaySelectedKey);
+    requestAnimationFrame(() => {
+        if (row) { row.scrollIntoView({ block: 'center' }); row.querySelector('button').focus({ preventScroll: true }); }
+        else { window.scrollTo(0, replayReturnScroll); }
+    });
+};
 
 function clearAdminReplay(clearCache = true) {
+    $('replayBrowse').hidden = false;
+    $('replayDetail').hidden = true;
     replayLoadedKey = null;
 
     if (clearCache) { replayRaw = null; }
@@ -34,26 +56,42 @@ function updateReplayControls() {
 
     $('replayList').disabled = replayBusy || replayDeleting;
     $('replayRecords').setAttribute('aria-busy', String(replayBusy || replayDeleting));
-    $('replayDate').disabled = replayDeleting;
+    for (const id of ['replayRange', 'replayDate', 'replayEnd']) { $(id).disabled = replayDeleting; }
+    for (const id of ['replayFilterMode', 'replayFilterId', 'replaySort']) { $(id).disabled = replayBusy || replayDeleting; }
+    $('replayMore').hidden = !replayListLoaded || !replayNextCursor;
+    $('replayMore').disabled = replayBusy || replayDeleting;
+    $('replayPagePrev').disabled = replayBusy || replayDeleting || replayPageIndex <= 0;
+    $('replayPageNext').disabled = replayBusy || replayDeleting || replayPageIndex >= replayPageTotal - 1;
     $('replayRecords').querySelectorAll('button').forEach(b => b.disabled = replayBusy || replayDeleting);
 }
 
 function renderReplayList() {
     closeReplayMenu();
-    const mode = $('replayFilterMode').value, filter = $('replayFilterId').value.trim().toLowerCase();
+    const mode = $('replayFilterMode').value, filter = $('replayFilterId').value.trim().replace(/^#/, '').trim().toLowerCase();
     const items = replayListItems.filter(i => (!mode || i.mode === mode) && i.gameId.toLowerCase().includes(filter)).slice();
-    items.sort((a, b) => $('replaySort').value === 'old' ? b.key.localeCompare(a.key) : a.key.localeCompare(b.key));
+    items.sort((a, b) => {
+        const order = (b.date + b.time).localeCompare(a.date + a.time) || a.key.localeCompare(b.key);
+
+        return $('replaySort').value === 'old' ? -order : order;
+    });
+    replayPageTotal = Math.ceil(items.length / 10);
+    replayPageIndex = Math.min(replayPageIndex, Math.max(0, replayPageTotal - 1));
+    $('replayPageCount').textContent = (replayPageTotal ? replayPageIndex + 1 : 0) + ' / ' + replayPageTotal;
     const records = $('replayRecords');
     records.replaceChildren();
 
-    if (replayListLoaded) { $('replayNotice').textContent = !replayListItems.length ? '当天暂无已保存回放' : '显示 ' + items.length + ' / ' + replayListItems.length + ' 场' + (replayListComplete ? '' : '；仅加载当天最新 1000 场，列表未列全'); }
+    if (replayListLoaded) {
+        $('replayNotice').textContent = (replayListCached ? '上次查询 · ' : '') + (items.length ? '匹配 ' + items.length + ' / 已加载 ' + replayListItems.length + ' 场 · 每页 10 场' : replayListComplete ? '没有匹配的对局' : '已加载记录中没有匹配，更多记录尚未查询') + (replayListComplete ? '' : '；列表未加载完整');
+    }
 
-    for (const item of items) {
+    for (const item of items.slice(replayPageIndex * 10, (replayPageIndex + 1) * 10)) {
         const row = document.createElement('article'), info = document.createElement('div'), title = document.createElement('strong'), id = document.createElement('p'), size = document.createElement('p'), actions = document.createElement('div');
-        row.className = 'replay-record';
+        row.className = 'replay-record' + (item.key === replaySelectedKey ? ' replay-selected' : '');
         row.dataset.key = item.key;
-        title.textContent = item.time + ' · ' + replayModes[item.mode];
-        id.textContent = '房间 ' + item.gameId;
+        title.textContent = item.date + ' ' + item.time + ' · ' + replayModes[item.mode];
+        if (item.daily) { const badge = document.createElement('span'); badge.className = 'replay-badge'; badge.textContent = '每日挑战'; title.append(' ', badge); }
+        if (item.key === replaySelectedKey) { const mark = document.createElement('span'); mark.className = 'replay-badge'; mark.textContent = '上次查看'; title.append(' ', mark); }
+        id.textContent = '🚪 房间 ' + item.gameId;
         size.className = 'hint';
         size.textContent = item.size < 1024 ? item.size + ' B' : (item.size / 1024).toFixed(1) + ' KiB';
         info.append(title, id, size);
@@ -228,6 +266,8 @@ async function loadAdminReplay(item) {
         replayRaw = raw;
         replayLoadedKey = item.key;
         showAdminReplayStyle(data);
+        item.daily = !!data.game.challengeDate;
+        showReplayDetail(item.key);
     } catch (e) { if (own === replayEpoch && active === 'replay') { toast(e.message, 'error'); } } finally {
         replayBusy = false;
         updateReplayControls();
@@ -243,7 +283,7 @@ async function removeAdminReplay(item, button) {
     replayDeleting = true;
 
     try {
-        if (!await confirmAction(item.time + ' · ' + replayModes[item.mode] + '\n房间 ' + item.gameId + '\n\n永久删除本局回放，旧链接将无法重新加载。\n不改变比赛结果、参赛历史和积分流水。', true)) { return; }
+        if (!await confirmAction(item.time + ' · ' + replayModes[item.mode] + '\n🚪 房间 ' + item.gameId + '\n\n永久删除本局回放，旧链接将无法重新加载。\n不改变比赛结果、参赛历史和积分流水。', true)) { return; }
 
         if (own !== replayListEpoch) { return; }
 
@@ -257,6 +297,7 @@ async function removeAdminReplay(item, button) {
         if (own !== replayListEpoch) { return; }
 
         replayListItems = replayListItems.filter(i => i.key !== item.key);
+        forgetReplayItem(item.key);
 
         if (replayRaw?.key === item.key) { replayRaw = null; }
 
@@ -274,60 +315,4 @@ async function removeAdminReplay(item, button) {
     }
 }
 
-const replayDateParts = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date());
-$('replayDate').value = ['year', 'month', 'day'].map(k => replayDateParts.find(p => p.type === k).value).join('-');
-$('replayDate').oninput = () => {
-    replayListEpoch++;
-    clearAdminReplay();
-    replayListItems = [];
-    replayListLoaded = false;
-    $('replayList').textContent = '加载列表';
-    $('replayNotice').textContent = '日期已变化，请加载列表';
-    renderReplayList();
-};
-$('replayFilterMode').onchange = renderReplayList;
-$('replayFilterId').oninput = renderReplayList;
-$('replaySort').onchange = renderReplayList;
-$('replayList').onclick = async () => {
-    if (replayBusy || replayDeleting) { return; }
-
-    const date = $('replayDate').value;
-
-    if (!date) {
-        toast('请选择日期', 'error');
-
-        return;
-    }
-
-    clearAdminReplay();
-    const own = ++replayListEpoch;
-    replayBusy = true;
-    replayListItems = [];
-    replayListLoaded = false;
-    renderReplayList();
-    $('replayNotice').textContent = '正在加载';
-
-    try {
-        const r = await api('/api/replays?date=' + encodeURIComponent(date));
-
-        if (own !== replayListEpoch) { return; }
-
-        if (r.date !== date || !Array.isArray(r.items) || r.items.length > 1000 || typeof r.complete !== 'boolean' || r.items.some(i => !i || typeof i.key !== 'string' || !i.key.startsWith('replays/bs1/') || i.key.includes('..') || typeof i.gameId !== 'string' || !Object.hasOwn(replayModes, i.mode) || !/^\d{2}:\d{2}:\d{2}$/.test(i.time) || !Number.isSafeInteger(i.size) || i.size < 0)) { throw Error('列表响应无效'); }
-
-        replayListItems = r.items;
-        replayListLoaded = true;
-        replayListComplete = r.complete;
-        $('replayList').textContent = '重新加载列表';
-        renderReplayList();
-    } catch (e) {
-        if (own === replayListEpoch) {
-            $('replayNotice').textContent = e.message;
-
-            if (active === 'replay') { toast(e.message, 'error'); }
-        }
-    } finally {
-        replayBusy = false;
-        updateReplayControls();
-    }
-};
-`;
+` + replayQueryScript;

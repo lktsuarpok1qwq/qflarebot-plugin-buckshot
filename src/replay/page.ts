@@ -1,3 +1,4 @@
+import { REPLAY_FILE } from './access.js';
 import { replayImportMarkup } from './viewer/tools.js';
 import { replayStyle, replayViewerMarkup, replayPlayerScript } from './viewer/player.js';
 
@@ -37,7 +38,7 @@ async function loadSharedReplay(force = false) {
             return readReplayFile(response);
         });
         if (own !== replayEpoch) { return; }
-        const gameId = key.match(/_(?:solo|duo|multi)_([\w.-]+)_[a-f0-9]{32}\.bs$/)?.[1];
+        const gameId = key.split('/').at(-1).match(${REPLAY_FILE})?.[5];
         if (data.game?.id !== gameId) { throw Error('回放场次不符'); }
         loadReplayData(data, key, position); toast('');
     } catch (error) { if (own === replayEpoch) { toast(error.message); $('retryFailed').hidden = false; } }

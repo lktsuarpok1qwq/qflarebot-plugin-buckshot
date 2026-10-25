@@ -1,3 +1,4 @@
+import { recoveryBatch } from './recovery.js';
 import { cleanupSoon, recoverMessages } from '../templates/cleanup.js';
 import { validateChallenge } from '../game/random.js';
 import { targetFor, validateConversation } from '../conversation.js';
@@ -36,8 +37,8 @@ export async function coordinateCreate(ctx: PluginContext, input: CreateInput, e
     requireRule(Number.isSafeInteger(input.stake) && input.stake >= 0 && (input.stake ? cfg.stakesEnabled && input.stake >= cfg.minStake && input.stake <= cfg.maxStake && (input.mode !== 'solo' || payout(input.stake, cfg.multipliers[input.difficulty]) <= 1e12 && payout(input.stake, cfg.multipliers[input.difficulty]) - input.stake <= cfg.rewardLimit) : cfg.freeEnabled), '下注范围或模式配置无效');
     const owner = await registryFor(ctx, input.member.id).owner();
     requireRule(!owner || owner.gameId === input.gameId && owner.groupId === input.groupId, '你已有尚未关闭的房间');
-    await ctx.db.run('INSERT INTO {rooms}(bot,group_id,game,status,due,intent) VALUES(?,?,?,?,?,?) ON CONFLICT(bot,group_id) DO UPDATE SET game=excluded.game,status=excluded.status,due=excluded.due,revision=0,intent=excluded.intent WHERE {rooms}.status=?', ctx.botId, input.groupId, input.gameId, 'CREATING', Date.now(), serialized, 'CLOSED');
-    const saved = await ctx.db.first<{ game: string; intent: string }>('SELECT game,intent FROM {rooms} WHERE bot=? AND group_id=?', ctx.botId, input.groupId);
+    const created = await ctx.db.first<{ game: string; intent: string }>('INSERT INTO {rooms}(bot,group_id,game,status,due,intent) VALUES(?,?,?,?,?,?) ON CONFLICT(bot,group_id) DO UPDATE SET game=excluded.game,status=excluded.status,due=excluded.due,revision=0,intent=excluded.intent WHERE {rooms}.status=? RETURNING game,intent', ctx.botId, input.groupId, input.gameId, 'CREATING', Date.now(), serialized, 'CLOSED');
+    const saved = created ?? await ctx.db.first<{ game: string; intent: string }>('SELECT game,intent FROM {rooms} WHERE bot=? AND group_id=?', ctx.botId, input.groupId);
     requireRule(saved?.game === input.gameId && saved.intent === serialized, '本群已有房间或创建编号冲突');
 
     const registry = registryFor(ctx, input.member.id);
@@ -139,7 +140,7 @@ export async function drain(ctx: PluginContext, group: string, session?: Session
     // SDK 一次发送最多占用约 20 秒；8 秒后不再领取新任务，给宿主生命周期留出余量。
     const budget = options.budget ?? { deadline: Date.now() + 8000, passiveReplies: 0, remaining: 24 };
     const deadline = budget.deadline;
-    let work = initial ?? await room.work(undefined, undefined, true, true);
+    let work = initial ?? await room.work(undefined, undefined, true, true, true);
 
     if (!work) { return { room: null, moves: [], panelHandled: false }; }
 
@@ -151,7 +152,7 @@ export async function drain(ctx: PluginContext, group: string, session?: Session
     if (work.moneyDue) {
         await processMoney(ctx, room, work);
 
-        if (!work.task) { work = await room.work(work.gameId, undefined, Date.now() < deadline, true); }
+        if (!work.task) { work = await room.work(work.gameId, undefined, Date.now() < deadline, true, true); }
     }
 
     if (work) { cleanupSoon(ctx, group, work.recallDue); }
@@ -163,7 +164,7 @@ export async function drain(ctx: PluginContext, group: string, session?: Session
     while (work && budget.remaining > 0) {
         if (!work.task && work.resumeAt !== undefined && work.resumeAt < deadline) {
             await waitForTime(work.resumeAt);
-            work = await room.work(work.gameId, undefined, Date.now() < deadline, true);
+            work = await room.work(work.gameId, undefined, Date.now() < deadline, true, true);
         }
 
         if (!work?.task) {
@@ -173,7 +174,7 @@ export async function drain(ctx: PluginContext, group: string, session?: Session
                 ctx.waitUntil((async () => {
                     await waitForTime(resumeAt);
 
-                    try { await drain(ctx, group, undefined, await room.work(gameId, undefined, true, true), false); } catch { ctx.logger.warn('等待后接续未完成，等待持久化恢复', { gameId }); }
+                    try { await drain(ctx, group, undefined, await room.work(gameId, undefined, true, true, true), false); } catch { ctx.logger.warn('等待后接续未完成，等待持久化恢复', { gameId }); }
                 })());
             }
 
@@ -217,7 +218,7 @@ export async function drain(ctx: PluginContext, group: string, session?: Session
             });
         }
 
-        work = await room.work(work.gameId, { id: task.id, lease: task.lease!, outcome, messageId, errorCode, sentAt }, budget.remaining > 0 && Date.now() < deadline, true);
+        work = await room.work(work.gameId, { id: task.id, lease: task.lease!, outcome, messageId, errorCode, sentAt }, budget.remaining > 0 && Date.now() < deadline, true, true);
 
         if (work) { cleanupSoon(ctx, group, work.recallDue); }
 
@@ -236,7 +237,7 @@ export async function drain(ctx: PluginContext, group: string, session?: Session
         try {
             for (const id of work.release) {
                 const history = work.history ? (({ results, ...record }) => ({ ...record, ...(results[id] ? { result: results[id] } : {}) }))(work.history) : undefined;
-                await registryFor(ctx, id).release(work.gameId, work.room.members.find(m => m.id === id)?.claimId ?? work.gameId, history, !!work.room.game);
+                await registryFor(ctx, id).release(work.gameId, work.room!.members.find(m => m.id === id)?.claimId ?? work.gameId, history, !!work.room!.game);
                 released.push(id);
             }
         } finally {
@@ -247,14 +248,15 @@ export async function drain(ctx: PluginContext, group: string, session?: Session
         if (work.release.length || work.closeEmpty) { work = await room.work(work.gameId, undefined, false); }
     }
 
-    return { room: work?.room ?? null, moves: work?.moves ?? [], panelHandled: panelHandled || budget.remaining === 0 && !!work?.room.tasks.length || !!work?.room.tasks.some(t => t.state === 'UNKNOWN' || t.state === 'FAILED' || t.state === 'SENDING') };
+    return { room: work?.room ?? null, moves: work?.moves ?? [], panelHandled: panelHandled || !!work?.task || budget.remaining === 0 && !!work?.room?.tasks.length || !!work?.room?.tasks.some(t => t.state === 'UNKNOWN' || t.state === 'FAILED' || t.state === 'SENDING') };
 }
 
 export async function cron(ctx: PluginContext): Promise<void> {
     const stopAt = Date.now() + 20000;
-    ctx.waitUntil(recoverMessages(ctx));
+    const batch = await recoveryBatch(ctx);
+    ctx.waitUntil(recoverMessages(ctx, batch.cleanup));
     await ctx.db.run('DELETE FROM {coord_ops} WHERE rowid IN (SELECT rowid FROM {coord_ops} WHERE bot=? AND state IN (?,?) AND expires_at<=? LIMIT 20)', ctx.botId, 'CREATE_READY', 'NAVIGATION', Date.now());
-    const pending = await ctx.db.all<{ request: string }>('SELECT request FROM {coord_ops} WHERE bot=? AND state=? LIMIT 4', ctx.botId, 'PENDING');
+    const pending = batch.joins;
 
     for (const row of pending) {
         const job = JSON.parse(row.request) as { group: string; request: Request };
@@ -262,6 +264,7 @@ export async function cron(ctx: PluginContext): Promise<void> {
         try { await coordinateJoin(ctx, job.group, job.request); } catch { ctx.logger.warn('加入协调等待恢复'); }
     }
 
+    // 加入恢复可能产生新的房间待办，保持先恢复加入、再发现房间的顺序。
     const jobs = await ctx.db.all<{ group_id: string; status: string; intent: string; revision: number }>('SELECT group_id,status,intent,revision FROM {rooms} WHERE bot=? AND due<=? ORDER BY due LIMIT 8', ctx.botId, Date.now());
 
     for (const job of jobs) {

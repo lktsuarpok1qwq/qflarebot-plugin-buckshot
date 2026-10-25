@@ -43,7 +43,20 @@ export function renderMessage(config: ReplyConfiguration, key: string, input: Me
 
     const navigationId = ['lobby', 'setupMode', 'setupAmount', 'setupDifficulty', 'create', 'quit', 'close', 'aiRoster'].includes(key) ? crypto.randomUUID() : undefined;
     const commands: Record<string, string> = { daily: '/恶魔轮盘 挑战', help: '/恶魔轮盘 帮助', status: '/恶魔轮盘 状态', solo: '/恶魔轮盘 新建 单人', duo: '/恶魔轮盘 新建 双人', multi: '/恶魔轮盘 新建 多人' };
+    // 复用命令按钮：只填入，不自动发送；从实际文案提取，不另查状态。
+    const plain = plainPresentation.message(config, key, input, false, prepared).text;
+    const drafts = [...new Set([...plain.matchAll(/\/恶魔轮盘(?: (?:帮助|状态|战绩|挑战|历史(?: \d+)?|确认创建 [a-f0-9-]{36}))?/g)].map(m => m[0]))];
+    const existing = result.buttons.flat().map(b => b.data);
+    const shortcuts = drafts.filter(data => !existing.includes(data)).map(data => ({ action: 'command' as const, label: data.startsWith('/恶魔轮盘 确认创建 ') ? '填入确认指令' : data.includes('历史 ') ? '下一页历史' : ({ 帮助: '查看帮助', 状态: '查看状态', 战绩: '个人战绩', 历史: '查看历史', 挑战: '每日挑战' }[data.split(' ')[1]] ?? '进入大厅'), data, enter: false }));
+
+    if (!['panel', 'menu'].includes(key) && result.buttons.length < 5 && shortcuts.length) { result.buttons.push(shortcuts.slice(0, 5)); }
+
     const rows = result.buttons.map(row => row.map(b => {
+        // 指令消息携带发送者身份与可用昵称，入场仍走原房间和版本校验。
+        if (b.action === 'join' && input.room) {
+            return button.command(b.label, `/恶魔轮盘 操作 ${input.room.gameId} ${input.room.version} 加入`, { enter: true });
+        }
+
         const data = b.data ?? commands[b.action];
 
         if (['solo', 'duo', 'multi'].includes(b.action) || b.action === 'daily' && navigationId || b.action.startsWith('draft') && b.action !== 'draftAmount') {
@@ -55,8 +68,6 @@ export function renderMessage(config: ReplyConfiguration, key: string, input: Me
         return b.action === 'link' ? button.link(b.label, data!) : b.action === 'command' || b.action === 'draftAmount' || commands[b.action] ? button.command(b.label, data!, { enter: b.enter }) : button.callback(b.label, callbackData!, { id: 'buckshot' });
     }));
 
-    const plain = plainPresentation.message(config, key, input, false, prepared).text;
-
     const outgoing = { text: plain, markdown: { content: markdown }, ...(rows.length ? { keyboard: keyboard(rows) } : {}) };
 
     if (input.room?.recallSeconds !== undefined) { recallDelays.set(outgoing, input.room.recallSeconds); }
@@ -65,16 +76,16 @@ export function renderMessage(config: ReplyConfiguration, key: string, input: Me
 
     if (navigationId) { navigation.set(outgoing, navigationId); }
 
-    const permanent = ['finish', 'noWinner', 'dailyRewardPaid', 'statistics', 'matchStatistics'];
+    const permanent = ['matchCancelled', 'finish', 'noWinner', 'dailyRewardPaid', 'statistics', 'statisticsText', 'matchStatistics'];
 
     if (!permanent.includes(key) && !input.parts?.some(p => permanent.includes(p.key))) { transient.add(outgoing); }
 
     if (navigationId) {
         const kind = key === 'create' || key === 'quit' || key === 'close' || key === 'aiRoster' ? key : 'choice';
-        lifetimes.set(outgoing, { kind, until: input.expiresAt ?? input.now! + (['quit', 'close'].includes(key) ? 30000 : 600000), gameId: input.room?.gameId ?? input.values?.gameId, version: input.room?.version });
+        lifetimes.set(outgoing, { kind, until: input.expiresAt ?? input.now! + (['quit', 'close'].includes(key) ? (input.room?.confirmSeconds ?? 30) * 1000 : 600000), gameId: input.room?.gameId ?? input.values?.gameId, version: input.room?.version });
     }
 
-    if (input.room && ['WAITING', 'PREPARING', 'PLAYING'].includes(input.room.status) && (key === 'panel' || key === 'menu' && !input.reason)) {
+    if (input.room && !input.room.reading && !input.room.actionWaiting && ['WAITING', 'PREPARING', 'PLAYING'].includes(input.room.status) && (key === 'panel' || key === 'menu' && !input.reason)) {
         panels.set(outgoing, { gameId: input.room.gameId, version: input.room.version, status: input.room.status, order: String(Date.now()).padStart(16, '0') + ':' + crypto.randomUUID() });
         transient.delete(outgoing);
     }

@@ -1,7 +1,7 @@
 import { personalText } from '../statistics/messages.js';
 import { replayLink } from '../replay/access.js';
 import { dateParts } from '../replay/format.js';
-import { renderTemplate } from '../templates/replies.js';
+import { renderTemplate, formatRoomId } from '../templates/replies.js';
 import { scopeFor, validateConversation } from '../conversation.js';
 import { deliver, renderMessage } from '../templates/send.js';
 import { DEFAULT_CONFIGURATION } from '../templates/reply-config.js';
@@ -33,13 +33,13 @@ export async function command(ctx: PluginContext, session: Session, text: string
     if (action === '帮助') { return renderMessage(templates, 'help', { scene: session.scene as 'group' | 'c2c' }); }
 
     if (action === '战绩') {
-        if (session.scene !== 'c2c') { return renderMessage(templates, 'statisticsPrivateOnly'); }
+        if (session.scene !== 'c2c') { return renderMessage(templates, 'error', { scene: 'group', actor: session.userId, values: { message: 'statisticsPrivateOnly' } }); }
 
-        return { text: personalText(await registryFor(ctx, session.userId).statistics()) };
+        return renderMessage(templates, 'statisticsText', { scene: 'c2c', values: { content: personalText(await registryFor(ctx, session.userId).statistics()) } });
     }
 
     if (action === '历史') {
-        if (session.scene !== 'c2c') { return renderMessage(templates, 'historyPrivateOnly'); }
+        if (session.scene !== 'c2c') { return renderMessage(templates, 'error', { scene: 'group', actor: session.userId, values: { message: 'historyPrivateOnly' } }); }
 
         const history = await registryFor(ctx, session.userId).replayHistory(args[1] === undefined ? undefined : Number(args[1]));
         const t = (key: string, values: Record<string, string> = {}) => renderTemplate(templates.replies[key], values);
@@ -47,7 +47,7 @@ export async function command(ctx: PluginContext, session: Session, text: string
         const items = history.items.map(row => {
             const time = dateParts(row.created);
 
-            return t('historyEntry', { time: time.date + ' ' + time.time, mode: t(modes[row.mode]), gameId: row.game, url: replayLink(row.object_key, ctx.publicUrl) });
+            return t('historyEntry', { time: time.date + ' ' + time.time, mode: t(modes[row.mode]), gameId: formatRoomId(row.game), url: replayLink(row.object_key, ctx.publicUrl) });
         }).join('\n\n');
 
         return renderMessage(templates, 'history', { values: { items: items || t('historyEmpty'), next: history.next ? t('historyNext', { cursor: String(history.next) }) : '' } });
@@ -96,7 +96,7 @@ export async function command(ctx: PluginContext, session: Session, text: string
 
     await supplementName(ctx, roomFor(ctx, scope), current, session);
 
-    return renderMessage(templates, 'panel', { room: current });
+    return renderMessage(templates, 'panel', { room: current, actor: session.userId });
 }
 
 async function confirmCreate(ctx: PluginContext, session: Session, gameId: string, templates: ReplyConfiguration, expected?: { mode: Mode; stake: number; difficulty: number }, requestConfig?: RequestConfig): Promise<OutgoingMessage | void> {
@@ -134,7 +134,7 @@ async function confirmCreate(ctx: PluginContext, session: Session, gameId: strin
         return;
     }
 
-    return renderMessage(templates, 'panel', { room: (await room.publicState())! });
+    return renderMessage(templates, 'panel', { room: (await room.publicState())!, actor: session.userId });
 }
 
 export async function interact(ctx: PluginContext, session: Session, data: unknown, settings?: ReplyConfiguration, requestConfig?: RequestConfig): Promise<OutgoingMessage | void> {
@@ -195,20 +195,20 @@ export async function interact(ctx: PluginContext, session: Session, data: unkno
     if (request.action.type === 'join') {
         request = { ...request, action: { type: 'join', member: { id: session.userId, name: '', ready: false, privateId: session.userId } } };
 
-        if (!await room.operation(input.gameId, actionId)) { await preflight(ctx, [session.userId], current!.stake); }
+        if (current!.stake && !await room.operation(input.gameId, actionId)) { await preflight(ctx, [session.userId], current!.stake); }
 
         try { await coordinateJoin(ctx, scope, request, eventName(session)); } catch (error) {
             if (!(error instanceof Error) || error.message !== '面板已更新，请查询状态') { throw error; }
 
-            return renderMessage(templates, 'panel', { room: (await room.publicState())!, notice: 'staleAction' });
+            return renderMessage(templates, 'panel', { room: (await room.publicState())!, actor: session.userId, notice: 'staleAction' });
         }
     } else {
-        if (request.action.type === 'start' && !await room.operation(input.gameId, actionId)) { await preflight(ctx, current!.members.map(p => p.id), current!.stake); }
+        if (request.action.type === 'start' && current!.stake && !await room.operation(input.gameId, actionId)) { await preflight(ctx, current!.members.map(p => p.id), current!.stake); }
 
-        const result = await room.act(request);
+        const result = await room.act(request, true);
 
         if (result.stale) {
-            if (result.room.status === 'WAITING') { return renderMessage(templates, 'panel', { room: result.room, notice: result.notice }); }
+            if (result.room.status === 'WAITING') { return renderMessage(templates, 'panel', { room: result.room, actor: session.userId, notice: result.notice }); }
 
             const snapshot = await room.menu(input.gameId, session.userId);
             await supplementName(ctx, room, snapshot.room, session);
@@ -241,7 +241,7 @@ export async function interact(ctx: PluginContext, session: Session, data: unkno
             return renderMessage(templates, 'menu', { room: result, moves: sent.moves, actor: session.userId });
         }
 
-        if (!sent.panelHandled && request.action.type !== 'play' && request.action.type !== 'quit') { return renderMessage(templates, 'panel', { room: result }); }
+        if (!sent.panelHandled && request.action.type !== 'play' && request.action.type !== 'quit') { return renderMessage(templates, 'panel', { room: result, actor: session.userId }); }
     }
 
     const sent = await drain(ctx, scope, session, initial, true, {

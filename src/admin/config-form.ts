@@ -2,20 +2,20 @@ import { parseMultiplier } from './multipliers.js';
 import { parsePoints, formatPoints } from '../amounts.js';
 
 export const configForm = 'const parseMultiplier = ' + parseMultiplier.toString() + ';\nconst parsePoints = ' + parsePoints.toString() + ';\nconst formatPoints = ' + formatPoints.toString() + ';\n' + String.raw`
-const fields = [['dailyReward', '每日挑战奖励', 'money'], ['showAIStyle', '显示庄家性格', 'boolean'], ['freeEnabled', '免费模式', 'boolean'], ['stakesEnabled', '积分下注', 'boolean'], ['turnSeconds', '操作时间', 'number'], ['recallSeconds', '撤回等待', 'number'], ['aiReadSeconds', '装填阅读时间', 'number'], ['aiIntervalMin', 'AI 最短间隔', 'seconds'], ['aiIntervalMax', 'AI 最长间隔', 'seconds'], ['aiDelaySeconds', 'AI 恢复延迟', 'number'], ['aiBudgetMs', 'AI 搜索预算', 'number'], ['minStake', '最小下注', 'money'], ['maxStake', '最大下注', 'money'], ['rewardLimit', '单局奖励上限', 'money'], ['multipliers', '五档倍率', 'multipliers']];
-const integerLimits = { turnSeconds: [20, 300], recallSeconds: [1, 20], aiReadSeconds: [0, 10], aiDelaySeconds: [1, 3], aiBudgetMs: [1, 8] };
-const hints = { aiIntervalMin: '0～3 秒，最多 1 位小数', aiIntervalMax: '0～3 秒，最多 1 位小数；两项均为 0 时即时行动', dailyReward: '积分，最多 2 位小数；0 不发奖', turnSeconds: '20～300 秒，整数', recallSeconds: '1～20 秒，整数；过程消息及失效按钮的清理等待', aiReadSeconds: '0～10 秒，整数；仅 AI 先手时等待', aiDelaySeconds: '1～3 秒，整数；中断后接手行动', aiBudgetMs: '1～8 毫秒，整数；每日挑战使用固定搜索量', minStake: '积分，最多 2 位小数', maxStake: '积分，最多 2 位小数', rewardLimit: '下注局的奖励上限，最多 2 位小数', multipliers: '1～10 倍，含本金，最多 3 位小数' };
+const fields = [['dailyEnabled', '每日挑战', 'boolean'], ['reminderSeconds', '剩余时间提醒', 'number'], ['waitingMinutes', '等待开局时限', 'number'], ['confirmSeconds', '关闭／认输确认时间', 'number'], ['actionDelaySeconds', '行动结果停留', 'number'], ['dailyReward', '每日挑战奖励', 'money'], ['showAIStyle', '显示庄家性格', 'boolean'], ['freeEnabled', '免费模式', 'boolean'], ['stakesEnabled', '积分下注', 'boolean'], ['turnSeconds', '操作时间', 'number'], ['recallSeconds', '撤回等待', 'number'], ['aiReadSeconds', '装填阅读时间', 'number'], ['aiIntervalMin', 'AI 最短间隔', 'seconds'], ['aiIntervalMax', 'AI 最长间隔', 'seconds'], ['aiDelaySeconds', 'AI 恢复延迟', 'number'], ['aiBudgetMs', 'AI 搜索预算', 'number'], ['minStake', '最小下注', 'money'], ['maxStake', '最大下注', 'money'], ['rewardLimit', '单局奖励上限', 'money'], ['multipliers', '五档倍率', 'multipliers']];
+const integerLimits = { reminderSeconds: [0, 30], waitingMinutes: [1, 30], confirmSeconds: [15, 60], actionDelaySeconds: [0, 5], turnSeconds: [20, 300], recallSeconds: [1, 20], aiReadSeconds: [0, 10], aiDelaySeconds: [1, 3], aiBudgetMs: [1, 8] };
+const hints = { reminderSeconds: '0 关闭；5～30 秒，须小于操作时间', waitingMinutes: '1～30 分钟，从创建房间起计算', confirmSeconds: '15～60 秒，关闭房间和认输的确认时限', actionDelaySeconds: '0～5 秒；行动结果送达后再显示面板，不扣操作时间，与 AI 间隔取较长值', dailyEnabled: '关闭后暂停新挑战，普通免费局不受影响', aiIntervalMin: '0～3 秒，最多 1 位小数', aiIntervalMax: '0～3 秒，最多 1 位小数；两项为 0 时无随机停顿，仍遵循结果停留时间', dailyReward: '积分，最多 2 位小数；0 不发奖', turnSeconds: '20～300 秒，整数', recallSeconds: '1～20 秒，整数；过程消息及失效按钮的清理等待', aiReadSeconds: '0～10 秒，整数；装填后先阅读，撤回公告再显示面板', aiDelaySeconds: '1～3 秒，整数；中断后接手行动', aiBudgetMs: '1～8 毫秒，整数；每日挑战使用固定搜索量', minStake: '积分，最多 2 位小数', maxStake: '积分，最多 2 位小数', rewardLimit: '下注局的奖励上限，最多 2 位小数', multipliers: '1～10 倍，含本金，最多 3 位小数' };
 let configEpoch = 0, configBusy = false, loaded = null, baseline = '', pending = null;
 let savedDraft = null;
 
 function validateValues(value) {
     if (!value || typeof value !== 'object') { throw new Error('配置响应无效'); }
 
-    for (const key of ['freeEnabled', 'stakesEnabled', 'showAIStyle']) {
+    for (const key of ['freeEnabled', 'stakesEnabled', 'showAIStyle', 'dailyEnabled']) {
         if (typeof value[key] !== 'boolean') { throw new Error('开关格式无效'); }
     }
 
-    for (const [key, min, max] of [['turnSeconds', 20, 300], ['recallSeconds', 1, 20], ['aiReadSeconds', 0, 10], ['aiDelaySeconds', 1, 3], ['aiBudgetMs', 1, 8], ['dailyReward', 0, 1e12], ['minStake', 1, 1e12], ['maxStake', 1, 2.5e11], ['rewardLimit', 0, 1e12]]) {
+    for (const [key, min, max] of [['reminderSeconds', 0, 30], ['waitingMinutes', 1, 30], ['confirmSeconds', 15, 60], ['actionDelaySeconds', 0, 5], ['turnSeconds', 20, 300], ['recallSeconds', 1, 20], ['aiReadSeconds', 0, 10], ['aiDelaySeconds', 1, 3], ['aiBudgetMs', 1, 8], ['dailyReward', 0, 1e12], ['minStake', 1, 1e12], ['maxStake', 1, 2.5e11], ['rewardLimit', 0, 1e12]]) {
         if (!Number.isSafeInteger(value[key]) || value[key] < min || value[key] > max) {
             const error = new Error(fields.find(field => field[0] === key)[1] + '须为 ' + (['minStake', 'maxStake', 'rewardLimit', 'dailyReward'].includes(key) ? formatPoints(min) + '～' + formatPoints(max) + '，最多 2 位小数' : min + '～' + max + ' 的整数'));
             error.field = key;
@@ -28,6 +28,8 @@ function validateValues(value) {
     }
 
     if (value.aiIntervalMin > value.aiIntervalMax) { throw new Error('AI 最长间隔不能小于最短间隔'); }
+
+    if (value.reminderSeconds !== 0 && (value.reminderSeconds < 5 || value.reminderSeconds >= value.turnSeconds)) { throw new Error('提醒须关闭或设为 5～30 秒，且小于操作时间'); }
 
     if (value.minStake > value.maxStake) { throw new Error('下注范围无效'); }
 
@@ -82,6 +84,10 @@ function validateForm(focus = false) {
     const shortest = $('cfg-aiIntervalMin'), longest = $('cfg-aiIntervalMax');
 
     if (!shortest.validationMessage && !longest.validationMessage && Number(shortest.value) > Number(longest.value)) { setError(longest, '最长间隔不能小于最短间隔'); }
+
+    const reminder = $('cfg-reminderSeconds'), turn = $('cfg-turnSeconds');
+
+    if (!reminder.validationMessage && !turn.validationMessage && Number(reminder.value) !== 0 && (Number(reminder.value) < 5 || Number(reminder.value) >= Number(turn.value))) { setError(reminder, '设为 0 关闭，或填写小于操作时间的 5～30 秒'); }
 
     $('configErrors').textContent = first ? '请修正标红的输入项' : '';
 
@@ -181,8 +187,8 @@ function loadForm(result) {
     $('configForm').replaceChildren();
 
     const groups = [
-        ['常用设置', ['freeEnabled', 'showAIStyle', 'turnSeconds', 'aiReadSeconds', 'aiIntervalMin', 'aiIntervalMax', 'recallSeconds'], '阅读不占玩家倒计时；最新操作面板保留。'],
-        ['积分与返还', ['dailyReward', 'stakesEnabled', 'minStake', 'maxStake', 'rewardLimit', 'multipliers'], '每日挑战每天一次，开局后计次；发奖需启用 Points 来源并由玩家开户。'],
+        ['常用设置', ['freeEnabled', 'showAIStyle', 'turnSeconds', 'reminderSeconds', 'waitingMinutes', 'confirmSeconds', 'actionDelaySeconds', 'aiReadSeconds', 'aiIntervalMin', 'aiIntervalMax', 'recallSeconds'], '阅读和结果停留不占玩家倒计时；最新操作面板保留。'],
+        ['积分与返还', ['dailyEnabled', 'dailyReward', 'stakesEnabled', 'minStake', 'maxStake', 'rewardLimit', 'multipliers'], '每日挑战每天一次，开局后计次；发奖需启用 Points 来源并由玩家开户。'],
         ['高级设置', ['aiDelaySeconds', 'aiBudgetMs'], '恢复延迟仅用于中断接手；搜索量另有上限。']
     ];
     const sections = new Map();

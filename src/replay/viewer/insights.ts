@@ -1,16 +1,16 @@
 import type { ReplayHeader, ReplayStep } from '../format.js';
+import { createReplayFilters } from './filters.js';
 
 // 仅计算已加载的动作和公开状态；不推算积分，不读取记录之外的信息。
 export function createReplayInsights(data: ReplayHeader & { steps: ReplayStep[] }) {
     const people = new Map<string, { id: string; shots: number; live: number; blank: number; items: number; damage: number; healing: number }>();
-    const highlights: { index: number; kinds: string[]; eliminated: string[] }[] = [];
     const lowLife = new Set<string>();
     let shots = 0, live = 0, blank = 0, loads = 0, ejected = 0, items = 0;
     let started = false, cancelled = false, noWinner = false;
     let previous = new Map<string, number>();
 
-    for (const [index, step] of data.steps.entries()) {
-        const state = step.state, kinds: string[] = [], eliminated: string[] = [];
+    for (const step of data.steps) {
+        const state = step.state;
 
         if (state.current !== undefined) {
             started = true;
@@ -23,7 +23,6 @@ export function createReplayInsights(data: ReplayHeader & { steps: ReplayStep[] 
         for (const result of step.results ?? []) {
             if (result.k === 'load') {
                 loads++;
-                kinds.push('load');
             }
 
             if (result.k === 'eject') { ejected++; }
@@ -45,21 +44,16 @@ export function createReplayInsights(data: ReplayHeader & { steps: ReplayStep[] 
             }
 
             if (result.k === 'noWinner') { noWinner = true; }
-
-            if (result.k === 'finish' || result.k === 'noWinner') { kinds.push('finish'); }
         }
 
         if (step.action.type === 'item') {
             items++;
 
             if (actor) { actor.items++; }
-
-            kinds.push('item');
         }
 
         if (step.action.type === 'cancel' || step.action.type === 'abort') {
             cancelled = true;
-            kinds.push('finish');
         }
 
         if (step.action.type === 'shoot' && actor && step.action.target) {
@@ -71,21 +65,12 @@ export function createReplayInsights(data: ReplayHeader & { steps: ReplayStep[] 
         for (const p of state.players) {
             const before = previous.get(p.p);
 
-            if (started && before !== undefined && before > 0 && p.hp === 0) {
-                eliminated.push(p.p);
-                kinds.push('eliminate');
-            }
-
             if (state.status === 'PLAYING' && p.hp === 1 && state.players.some(other => other.p !== p.p && other.hp > 0)) {
                 lowLife.add(p.p);
-
-                if (before !== undefined && before > 1) { kinds.push('danger'); }
             }
 
             if (step.action.type === 'item' && p.p === step.actor && actor && before !== undefined) { actor.healing += Math.max(0, p.hp - before); }
         }
-
-        if (kinds.length) { highlights.push({ index, kinds: [...new Set(kinds)], eliminated }); }
 
         previous = new Map(state.players.map(p => [p.p, p.hp]));
     }
@@ -99,18 +84,17 @@ export function createReplayInsights(data: ReplayHeader & { steps: ReplayStep[] 
     const winner = data.game.winner;
     const result = winner ? 'winner' : cancelled || !started ? 'cancelled' : noWinner ? 'draw' : 'unknown';
 
-    return { complete: data.integrity.complete, started, result, winner, winnerLowLife: !!winner && lowLife.has(winner), totals: { shots, live, blank, loads, ejected, items }, players, highlights, leaders: { shots: leaders('shots'), items: leaders('items'), damage: leaders('damage') } };
+    return { complete: data.integrity.complete, started, result, winner, winnerLowLife: !!winner && lowLife.has(winner), totals: { shots, live, blank, loads, ejected, items }, players, leaders: { shots: leaders('shots'), items: leaders('items'), damage: leaders('damage') } };
 }
 
 export const replayInsightsStyle = String.raw`
-.replay-insights{margin:16px 0}.replay-insights summary{cursor:pointer;font-weight:600;padding:8px 0}.replay-insights summary:focus-visible{outline:2px solid var(--qb-ring);outline-offset:2px}.replay-insights ul{padding-left:20px;line-height:1.8;overflow-wrap:anywhere}.replay-insights .actions{margin:10px 0}.replay-insights select{min-width:0;max-width:100%;font:inherit;padding:8px;color:var(--qb-fg);background:var(--qb-input);border:1px solid var(--qb-border-strong);border-radius:var(--qb-radius)}#replayHighlight{flex:1;min-width:160px}.replay-performance{max-width:100%;overflow:auto}.replay-performance table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}.replay-performance th,.replay-performance td{padding:10px;text-align:right;white-space:nowrap;border-bottom:1px solid var(--qb-border)}.replay-performance th:first-child,.replay-performance td:first-child{text-align:left;white-space:normal;min-width:100px;overflow-wrap:anywhere}@media(pointer:coarse){.replay-insights select,.replay-insights summary{min-height:44px}}
+.replay-insights{margin:16px 0}.replay-insights summary{cursor:pointer;font-weight:600;padding:8px 0}.replay-insights summary:focus-visible{outline:2px solid var(--qb-ring);outline-offset:2px}.replay-insights ul{padding-left:20px;line-height:1.8;overflow-wrap:anywhere}.replay-insights .actions{margin:10px 0}.replay-insights label{min-width:0;max-width:100%}.replay-insights select{min-width:0;max-width:100%;font:inherit;padding:8px;color:var(--qb-fg);background:var(--qb-input);border:1px solid var(--qb-border-strong);border-radius:var(--qb-radius)}#replayHighlight{flex:1;min-width:160px}.replay-performance{max-width:100%;overflow:auto}.replay-performance table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}.replay-performance th,.replay-performance td{padding:10px;text-align:right;white-space:nowrap;border-bottom:1px solid var(--qb-border)}.replay-performance th:first-child,.replay-performance td:first-child{text-align:left;white-space:normal;min-width:100px;overflow-wrap:anywhere}@media(pointer:coarse){.replay-insights select,.replay-insights summary{min-height:44px}}
 `;
 export const replayInsightsMarkup = String.raw`
-<div class="replay-insights"><p id="replayInsightsCoverage" class="hint" hidden>记录不完整，以下仅统计已记录的步骤。</p><details><summary>本局小结</summary><ul id="replayInsightsSummary"></ul></details><details><summary>关键操作</summary><div class="actions"><label>筛选 <select id="replayHighlightKind"><option value="">全部</option><option value="load">换弹</option><option value="item">使用道具</option><option value="eliminate">淘汰</option><option value="danger">仅剩 1 血</option><option value="finish">终局</option></select></label><select id="replayHighlight" aria-label="关键操作"></select><button id="replayHighlightJump" disabled>跳转</button></div><p id="replayHighlightNotice" class="hint" role="status"></p></details><details><summary>个人表现</summary><div class="replay-performance"><table><thead><tr><th>玩家</th><th>开枪（实／空）</th><th>道具</th><th>射击伤害</th><th>回血</th></tr></thead><tbody id="replayPerformance"></tbody></table></div><p class="hint">伤害含自伤；回血按实际增加计算，肾上腺素算一次道具操作。</p></details></div>
+<div class="replay-insights"><p id="replayInsightsCoverage" class="hint" hidden>记录不完整，以下仅统计已记录的步骤。</p><details><summary>本局小结</summary><ul id="replayInsightsSummary"></ul></details><details id="replayFilters"><summary>操作筛选</summary><div class="actions"><label>分类 <select id="replayHighlightKind"></select></label><label>事件 <select id="replayHighlightEvent"></select></label><select id="replayHighlight" aria-label="操作步骤"></select><button id="replayHighlightJump" disabled>跳转</button></div><p id="replayHighlightNotice" class="hint" role="status"></p></details><details><summary>个人表现</summary><div class="replay-performance"><table><thead><tr><th>玩家</th><th>开枪（实／空）</th><th>道具</th><th>射击伤害</th><th>回血</th></tr></thead><tbody id="replayPerformance"></tbody></table></div><p class="hint">伤害含自伤；回血按实际增加计算，肾上腺素算一次道具操作。</p></details></div>
 `;
-export const replayInsightsScript = 'const createReplayInsights = ' + createReplayInsights.toString() + ';\n' + String.raw`
-let replayAnalysis = null, replayVisibleHighlights = new Set();
-const replayHighlightNames = { load: '换弹', item: '使用道具', eliminate: '淘汰', danger: '仅剩 1 血', finish: '终局' };
+export const replayInsightsScript = 'const createReplayFilters = ' + createReplayFilters.toString() + ';\n' + 'const createReplayInsights = ' + createReplayInsights.toString() + ';\n' + String.raw`
+let replayAnalysis = null, replayFilterGroups = [], replayVisibleHighlights = new Set();
 
 function replayInsightName(id) {
     const name = replayName(id);
@@ -156,20 +140,31 @@ function loadReplayInsights() {
 
         return row;
     }));
-    $('replayHighlightKind').value = '';
+    replayFilterGroups = createReplayFilters(replayData.steps);
+    $('replayFilters').open = false;
+    $('replayHighlightKind').replaceChildren(new Option('全部', ''), ...replayFilterGroups.map((g, i) => new Option(g.title, String(i))));
+    loadReplayFilterEvents();
+}
+
+function loadReplayFilterEvents() {
+    const group = replayFilterGroups[$('replayHighlightKind').value];
+    $('replayHighlightEvent').replaceChildren(new Option('全部', ''), ...(group?.entries || []).map(e => new Option(e.label, e.key)));
+    $('replayHighlightEvent').disabled = !group;
     renderReplayHighlights();
 }
 
 function renderReplayHighlights() {
     if (!replayAnalysis) { return; }
 
-    const kind = $('replayHighlightKind').value, highlights = replayAnalysis.highlights.filter(h => !kind || h.kinds.includes(kind));
-    replayVisibleHighlights = new Set(highlights.map(h => h.index));
-    $('replayHighlight').replaceChildren(new Option(highlights.length ? '选择关键操作' : '没有匹配的操作', ''), ...highlights.map(h => {
-        const step = replayData.steps[h.index], actor = step.actor ? replayInsightName(step.actor) + ' · ' : '';
-        const label = h.kinds.map(k => k === 'eliminate' ? '淘汰 ' + h.eliminated.map(replayInsightName).join('、') : k === 'item' ? replayItem(step.action.item) || '使用道具' : replayHighlightNames[k]).join(' · ');
+    const group = replayFilterGroups[$('replayHighlightKind').value], key = $('replayHighlightEvent').value;
+    const entries = group?.entries.filter(e => !key || e.key === key);
+    const indices = entries ? [...new Set(entries.flatMap(e => e.indices))].sort((a, b) => a - b) : replayData.steps.map((_, i) => i);
+    replayVisibleHighlights = new Set(indices);
+    $('replayHighlight').replaceChildren(new Option(indices.length ? '选择操作步骤' : '没有匹配的操作', ''), ...indices.map(index => {
+        const step = replayData.steps[index];
+        const labels = entries?.filter(e => e.indices.includes(index)).map(e => e.label) || [];
 
-        return new Option('第 ' + h.index + ' 步 · ' + actor + label, String(h.index));
+        return new Option('第 ' + index + ' 步 · ' + replayActionLabel(step.action, step.actor) + (labels.length ? ' · ' + labels.join('、') : ''), String(index));
     }));
     syncReplayHighlight();
 }
@@ -179,10 +174,11 @@ function syncReplayHighlight() {
 
     $('replayHighlight').value = replayVisibleHighlights.has(replayPosition) ? String(replayPosition) : '';
     $('replayHighlightJump').disabled = $('replayHighlight').value === '';
-    $('replayHighlightNotice').textContent = replayVisibleHighlights.size ? '只跳转记录，不执行游戏操作' : '没有匹配的操作';
+    $('replayHighlightNotice').textContent = replayVisibleHighlights.size ? '共 ' + replayVisibleHighlights.size + ' 步' : '没有匹配的操作';
 }
 
-$('replayHighlightKind').onchange = renderReplayHighlights;
+$('replayHighlightKind').onchange = loadReplayFilterEvents;
+$('replayHighlightEvent').onchange = renderReplayHighlights;
 $('replayHighlight').onchange = () => { $('replayHighlightJump').disabled = $('replayHighlight').value === ''; };
 $('replayHighlightJump').onclick = () => {
     const value = $('replayHighlight').value;

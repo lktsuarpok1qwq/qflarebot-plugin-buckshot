@@ -1,9 +1,8 @@
 import { replayPublicKey } from './signing.js';
 import { deleteReplay, validReplayKey } from './manage.js';
-import { REPLAY_FILE as NAME } from './access.js';
+import { listReplays } from './list.js';
 import { replayPage } from './page.js';
 import type { Route, RouteInput } from '@qqbot/sdk';
-import { replayPrefix, REPLAY_ZONE } from './format.js';
 
 export const replayRoutes: Route[] = [
     {
@@ -15,23 +14,7 @@ export const replayRoutes: Route[] = [
     },
     { method: 'GET', path: '/replay/', auth: 'public', handler: () => new Response(replayPage, { headers: { 'content-type': 'text/html; charset=utf-8', 'referrer-policy': 'no-referrer', 'x-robots-tag': 'noindex, nofollow', 'content-security-policy': "sandbox allow-scripts allow-downloads allow-popups; default-src 'self'; script-src 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'" } }) },
     {
-        method: 'GET', path: '/api/replays', auth: 'admin', handler: async ({ ctx, request }) => {
-            const date = new URL(request.url).searchParams.get('date') ?? '';
-
-            if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(Date.parse(date + 'T00:00:00Z')) || new Date(date + 'T00:00:00Z').toISOString().slice(0, 10) !== date) { return Response.json({ error: '日期无效' }, { status: 400 }); }
-
-            const prefix = replayPrefix(ctx.botId) + date + '/';
-            const objects = await ctx.r2.list(prefix, { limit: 1001 });
-            const items = objects.slice(0, 1000).flatMap(o => {
-                if (!o.key.startsWith(prefix)) { return []; }
-
-                const name = o.key.slice(prefix.length).match(NAME);
-
-                return name ? [{ key: o.key, time: `${name[1]}:${name[2]}:${name[3]}`, mode: name[4], gameId: name[5], size: o.size }] : [];
-            });
-
-            return Response.json({ date, timezone: REPLAY_ZONE, items, complete: objects.length <= 1000 }, { headers: { 'cache-control': 'private, no-store' } });
-        }
+        method: 'GET', path: '/api/replays', auth: 'admin', handler: ({ ctx, request }) => listReplays(ctx, new URL(request.url).searchParams)
     },
     {
         method: 'POST', path: '/api/replay-delete', auth: 'admin', handler: async ({ ctx, request }) => {

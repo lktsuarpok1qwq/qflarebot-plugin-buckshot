@@ -11,7 +11,7 @@ export interface Task {
     id: string; seq: number; kind: 'message' | 'recall'; target: string; private: boolean;
     parts?: import('../templates/presentation.js').Part[]; payload?: import('@qqbot/sdk').OutgoingMessage; text: string; critical: boolean; loadId?: number; panel?: boolean; messageId?: string;
     state: 'PENDING' | 'SENDING' | 'SENT' | 'UNKNOWN' | 'FAILED'; lease?: string; leaseUntil?: number; attempts: number;
-    panelOrder?: string; keep?: boolean; error?: string; announcementSentAt?: number; sentAt?: number; expiresAt?: number; plain?: boolean; snapshot?: ReturnType<typeof import('./state.js').view>;
+    actionResult?: boolean; panelOrder?: string; keep?: boolean; error?: string; notBefore?: number; announcementSentAt?: number; sentAt?: number; expiresAt?: number; plain?: boolean; snapshot?: Pick<PanelReference, 'version' | 'status'>;
 }
 export interface MoneyTask {
     id: string; kind: 'reserve' | 'settle' | 'release' | 'renew' | 'credit'; input: Parameters<PointsService['credit']>[0] | Parameters<PointsService['reserveBundle']>[0] | Parameters<PointsService['settle']>[0] | Parameters<PointsService['release']>[0] | Parameters<PointsService['renewReservation']>[0];
@@ -29,7 +29,7 @@ export interface RoomState {
     version: number; status: Status; mode: Mode; stake: number; difficulty: number;
     config: ConfigSnapshot; createdAt: number; members: Member[]; opponents?: Opponent[]; game?: Game;
     paused: boolean; recovery: boolean; reason?: string; remainingMs: number; deadline?: number; reminderSent: boolean;
-    aiDue?: number; aiReadUntil?: number; aiPaceUntil?: number; outbox: Task[]; seq: number; money: MoneyTask[]; reserved: boolean;
+    resultUntil?: number; aiDue?: number; aiReadUntil?: number; aiPaceUntil?: number; outbox: Task[]; seq: number; money: MoneyTask[]; reserved: boolean;
     reserveAt?: number; reserveUntil?: number; renewal: number; released: string[];
     closeConfirmation?: { actor: string; version: number; expires: number };
     confirmations: Record<string, { version: number; expires: number }>; indexVersion: number; indexDue?: number | null; indexStatus?: Status; departures?: string[]; abortRequested?: boolean; pendingReleases?: { id: string; claimId: string }[];

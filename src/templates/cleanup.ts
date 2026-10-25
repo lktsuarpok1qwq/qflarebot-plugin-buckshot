@@ -41,12 +41,14 @@ export function cleanupSoon(ctx: PluginContext, scope: string, due: number | nul
 export async function cleanMessages(ctx: PluginContext, scope: string, firstDue = Date.now(), stop = Date.now() + 22000, budget = { remaining: 24 }): Promise<void> {
     const room = ctx.durable.get<BuckshotRoom>('BuckshotRoom', `${ctx.botId}:${scope}`);
     let due: number | null = firstDue;
+    let claimed: Awaited<ReturnType<typeof room.claimRecalls>> | undefined;
 
-    while (budget.remaining > 0 && due !== null && due <= stop) {
+    while (budget.remaining > 0 && (claimed?.length || due !== null && due <= stop)) {
         // 合并相差数毫秒的回执，不按微小到期差拆出大量 RPC。
-        while (due + 25 > Date.now()) { await new Promise(resolve => setTimeout(resolve, due! + 25 - Date.now())); }
+        while (!claimed?.length && due! + 25 > Date.now()) { await new Promise(resolve => setTimeout(resolve, due! + 25 - Date.now())); }
 
-        const jobs = await room.claimRecalls(Math.min(12, budget.remaining));
+        const jobs = claimed?.length ? claimed : await room.claimRecalls(Math.min(12, budget.remaining));
+        claimed = undefined;
 
         if (!jobs.length) { break; }
 
@@ -65,12 +67,14 @@ export async function cleanMessages(ctx: PluginContext, scope: string, firstDue 
             results.push({ messageId: job.messageId, target: job.target, lease: job.lease!, ok });
         }
 
-        due = await room.recallsDone(results);
+        const next = await room.recallsDone(results, Date.now() < stop ? Math.min(12, budget.remaining) : 0);
+        due = next.due;
+        claimed = next.jobs;
     }
 }
 
-export async function recoverMessages(ctx: PluginContext): Promise<void> {
-    const rows = await ctx.db.all<{ id: string; expires_at: number }>('SELECT id,expires_at FROM {coord_ops} WHERE bot=? AND game_id=? AND state=? AND expires_at<=? ORDER BY expires_at LIMIT 8', ctx.botId, 'message-cleanup', 'CLEANUP', Date.now());
+export async function recoverMessages(ctx: PluginContext, pending?: { id: string; expires_at: number }[]): Promise<void> {
+    const rows = pending ?? await ctx.db.all<{ id: string; expires_at: number }>('SELECT id,expires_at FROM {coord_ops} WHERE bot=? AND game_id=? AND state=? AND expires_at<=? ORDER BY expires_at LIMIT 8', ctx.botId, 'message-cleanup', 'CLEANUP', Date.now());
 
     const stop = Date.now() + 20000, budget = { remaining: 24 };
 

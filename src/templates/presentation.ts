@@ -2,7 +2,7 @@ import { isPrivateScope } from '../conversation.js';
 import { menuEntries } from './menu.js';
 import { qqAt } from '@qqbot/sdk';
 import { formatPoints } from '../amounts.js';
-import { renderTemplate, escapeMarkdown } from './replies.js';
+import { renderTemplate, escapeMarkdown, formatHearts, formatRoomId } from './replies.js';
 import type { ReplyConfiguration, ReplyButton } from './reply-config.js';
 import type { view } from '../room/state.js';
 import type { Action } from '../game/types.js';
@@ -25,7 +25,7 @@ export function preparePresentation(input: MessageInput) {
 
     return {
         menu, players, missingNames, names: new Map(s?.members.map(m => [m.id, m.name])), current: s?.game ? players.get(s.game.current) : undefined, offset, count, canQuit, selected: menu.entries.slice(offset, offset + count),
-        stake: s?.stake ? formatPoints(s.stake) : '', seconds: s ? String(Math.ceil(Math.max(0, s.deadline === undefined ? s.remainingMs : s.deadline - now) / 1000)) : '', reading: Math.max(0, (s?.aiReadUntil ?? 0) - now)
+        stake: s?.stake ? formatPoints(s.mode === 'solo' ? s.winReturn! : s.stake * (s.game?.players.filter(p => !p.ai).length ?? s.members.length)) : '', seconds: s ? String(Math.ceil(Math.max(0, s.deadline === undefined ? s.remainingMs : s.deadline - now) / 1000)) : '', reading: Math.max(0, (s?.aiReadUntil ?? 0) - now)
     };
 }
 
@@ -49,6 +49,8 @@ export function createReplyPresentation(render: typeof renderTemplate, escape: t
             cached.set(key, entry);
         }
 
+        if (values.gameId !== undefined && key !== 'create') { values = { ...values, gameId: formatRoomId(values.gameId) }; }
+
         const used = entry.names;
 
         if (!used.length) { return source; }
@@ -62,6 +64,11 @@ export function createReplyPresentation(render: typeof renderTemplate, escape: t
 
     function part(config: ReplyConfiguration, p: Part, name: (id: string, value: string) => string) {
         const v = { ...p.values }, raw: string[] = [];
+
+        if (p.key === 'load') {
+            v.liveIcons = '🔴'.repeat(Number(v.live));
+            v.blankIcons = '⚪'.repeat(Number(v.blank));
+        }
 
         for (const [key, id] of Object.entries(p.users ?? {})) {
             v[key] = name(id, v[key] ?? '');
@@ -83,7 +90,7 @@ export function createReplyPresentation(render: typeof renderTemplate, escape: t
             raw.push('target');
         }
 
-        return text(config, p.key, v, raw) + (v.replayUrl && ['finish', 'noWinner'].includes(p.key) ? '\n' + text(config, 'replayLink', { url: v.replayUrl }, ['url']) : '');
+        return text(config, p.key, v, raw) + (v.replayUrl && ['finish', 'noWinner', 'matchCancelled'].includes(p.key) ? '\n' + text(config, 'replayLink', { url: v.replayUrl }, ['url']) : '');
     }
 
     function buttons(config: ReplyConfiguration, key: string, dynamic: Record<string, string> = {}, choices: string[] = [], labels: string[] = []) {
@@ -115,7 +122,24 @@ export function createReplyPresentation(render: typeof renderTemplate, escape: t
         return rows;
     }
 
+    function personal(content: string, input: MessageInput): string {
+        const group = input.scene === 'group' || input.scene === undefined && !!input.room && !isPrivateScope(input.room.groupId);
+
+        if (!group || !input.actor) { return content; }
+
+        const match = content.match(/^(⚠️|⏳|⌛|💀|👀|🔒|📅|🪙|🛠️|⏸️|🏁|🔄|ℹ️)\s*/);
+        const body = content.slice(match?.[0].length ?? 0).replace(/^你(?:的|[，,])?/, '');
+
+        return (match ? match[1] + ' ' : '') + qqAt(input.actor) + '，' + body;
+    }
+
     function message(config: ReplyConfiguration, key: string, input: MessageInput = {}, withButtons = true, prepared = preparePresentation(input)) {
+        if (key === 'setupAmount' && input.notice) { return { text: personal(text(config, input.notice), input), buttons: withButtons ? buttons(config, key, input.dynamic) : [] }; }
+
+        if (key === 'menu' && input.reason) { return { text: personal(text(config, input.reason, { name: '你' }), input), buttons: [] }; }
+
+        if (['panel', 'menu'].includes(key) && (input.room?.reading || input.room?.actionWaiting)) { return { text: personal(text(config, input.room.reading ? 'readingWait' : 'menuBusy'), input), buttons: [] }; }
+
         const values = { ...input.values }, raw: string[] = [], dynamic = { ...input.dynamic };
         let choices = input.choices ?? [];
         let labels: string[] = [];
@@ -135,11 +159,11 @@ export function createReplyPresentation(render: typeof renderTemplate, escape: t
             raw.push('title', 'items');
         } else if (key === 'panel') {
             const s = input.room!;
-            const rows = s.game ? s.game.players.map((p, i) => t('player', { number: String(i + 1), name: displayName(p), life: String(p.life), control: p.control === 'none' ? '' : t('controlled'), inventory: p.inventory.length ? p.inventory.map((item, n) => t('inventoryItem', { number: String(n + 1), item: t('item' + item) }, ['item'])).join(t('inventorySeparator')) : t('inventoryEmpty') }, ['name', 'inventory', 'control'])) : [...s.members, ...(s.opponents ?? []).map(p => ({ ...p, ai: true, ready: true }))].map(p => t('member', { name: displayName(p), ready: t(p.ready ? 'ready' : 'notReady') }, ['name', 'ready']));
+            const rows = s.game ? s.game.players.map(p => t('player', { name: displayName(p), hearts: formatHearts(p.life), control: p.life > 0 && p.control === 'skip' ? t('controlled') : '', inventory: p.inventory.length ? p.inventory.map((item, n) => t('inventoryItem', { number: String(n + 1), item: t('item' + item) }, ['item'])).join(t('inventorySeparator')) : t('inventoryEmpty') }, ['name', 'inventory', 'control'])) : [...s.members, ...(s.opponents ?? []).map(p => ({ ...p, ai: true, ready: true }))].map(p => t('member', { name: displayName(p), ready: t(p.ready ? 'ready' : 'notReady') }, ['name', 'ready']));
             const { seconds, reading, current } = prepared;
             const timer = reading && s.status === 'PLAYING' && !s.paused && !s.recovery ? t('timerReading', { seconds: String(Math.ceil(reading / 1000)) }) : s.status !== 'PLAYING' ? t(s.game ? 'timerEnded' : 'timerWaiting') : t(s.paused || s.recovery ? 'timerPaused' : 'timer', { seconds });
             const currentName = current ? group && !current.ai && s.status === 'PLAYING' && !s.paused && !s.recovery ? qqAt(current.id) : current.ai ? escape(current.name) : name(current.id, current.name) : '';
-            Object.assign(values, { gameId: s.gameId, version: String(s.version), status: t('status' + s.status), paused: s.paused ? t('paused') : '', recovery: s.recovery ? t('recovery') : '', stake: s.stake ? t('stake', { amount: prepared.stake }) : t('free'), items: rows.filter(Boolean).join(config.historySeparator ?? t('playerSeparator')), timer, turn: s.game ? t('turn', { name: currentName, direction: t(s.game.direction === 1 ? 'forward' : 'reverse') }, ['name', 'direction']) : t('waiting') });
+            Object.assign(values, { gameId: s.gameId, version: String(s.version), status: t('status' + s.status), paused: s.paused ? t('paused') : '', recovery: s.recovery ? t('recovery') : '', stake: s.stake ? t(s.mode === 'solo' ? 'panelReturn' : s.game ? 'panelPool' : 'panelExpectedPool', { amount: prepared.stake }) : t('free'), items: rows.filter(Boolean).join(config.historySeparator ?? t('playerSeparator')), timer, turn: s.game ? t('turn', { name: currentName, direction: t(s.game.direction === 1 ? 'forward' : 'reverse') }, ['name', 'direction']) : t('waiting') });
 
             if (s.challengeDate) { values.stake = t('dailyLabel', { date: s.challengeDate }) + '\n' + t('dailyReward', { amount: formatPoints(s.dailyReward ?? 0) }) + '\n' + t('dailyNoLoss'); }
 
@@ -157,8 +181,6 @@ export function createReplyPresentation(render: typeof renderTemplate, escape: t
 
             if (withButtons) { for (const action of s.status === 'WAITING' ? ['join', 'ready', 'start', 'leave', 'close'] : s.status === 'PLAYING' ? ['choose', 'quit'] : []) { dynamic[action] = JSON.stringify({ gameId: s.gameId, expectedVersion: s.version, ...(action === 'choose' ? { menu: 0 } : { action: { type: action === 'quit' ? 'confirmQuit' : action === 'close' ? 'confirmClose' : action } }) }); } }
         } else if (key === 'menu') {
-            if (input.reason === 'menuSpectator' || input.reason === 'menuOtherTurn') { return { text: t(input.reason, { name: name(input.actor ?? '', input.name ?? '') }, ['name']), buttons: [] }; }
-
             const s = input.room!, moves = input.moves ?? [];
             const { offset, count, canQuit, selected, players, menu } = prepared;
             const player = (id: string) => players.get(id)!;
@@ -218,15 +240,25 @@ export function createReplyPresentation(render: typeof renderTemplate, escape: t
 
             values.reward = values.challengeDate ? t('dailyReward', { amount: formatPoints(Number(values.dailyReward || 0)) }) : values.reward ? (mode === 'Solo' ? t('soloReward', { amount: formatPoints(Number(values.reward)) }) : t('multiReward')) : '';
             raw.push('mode', 'difficulty', 'stake', 'reward');
+        } else if (key === 'close' || key === 'quit') {
+            values.seconds = String(input.room?.confirmSeconds ?? 30);
         } else if (key === 'error') {
-            values.message = t(values.message || 'unknownError');
-            raw.push('message');
+            const reason = values.message || 'unknownError';
+            let content = t(reason);
+
+            if (!/^(⚠️|⏳|⌛|💀|👀|🔒|📅|🪙|🛠️|⏸️|🏁|🔄|ℹ️)/u.test(content)) { content = t('error', { message: content }, ['message']); }
+
+            if (['reason20', 'reason21', 'reason29', 'reason30', 'reason39', 'reason40', 'reason41', 'reason42', 'reason43', 'reason44', 'reason45', 'reason67', 'reason68'].includes(reason)) { content += '\n' + t('contactAdmin'); }
+
+            return { text: personal(content, input), buttons: [] };
         } else if (input.parts?.length) {
-            const link = input.parts.find(p => p.key === 'finish' || p.key === 'noWinner')?.values.replayUrl;
+            const link = input.parts.find(p => p.key === 'finish' || p.key === 'noWinner' || p.key === 'matchCancelled')?.values.replayUrl;
 
             if (link?.startsWith('https://')) { dynamic.link = link; }
 
-            return { text: input.parts.map(p => part(config, p, name)).filter(Boolean).join(t('eventSeparator')), buttons: withButtons ? buttons(config, key, dynamic, choices) : [] };
+            const sections = input.parts.map((p, i) => (i > 0 && ['matchMode', 'matchDailyWin', 'matchDailyLoss', 'matchRefund', 'matchStatistics', 'dailyNoLoss'].includes(p.key) ? '\n' : '') + part(config, p, name));
+
+            return { text: sections.filter(Boolean).join(t('eventSeparator')), buttons: withButtons ? buttons(config, key, dynamic, choices) : [] };
         }
 
         if (key === 'history') { raw.push('items'); }
@@ -238,7 +270,7 @@ export function createReplyPresentation(render: typeof renderTemplate, escape: t
 
         const content = t(key, values, raw);
 
-        return { text: input.notice ? t(input.notice) + '\n' + content : content, buttons: withButtons ? buttons(config, key, dynamic, choices, labels).map(row => key === 'lobby' && input.scene === 'c2c' ? row.filter(b => b.action !== 'duo' && b.action !== 'multi') : row).filter(row => row.length) : [] };
+        return { text: input.notice ? personal(t(input.notice), input) + '\n' + content : content, buttons: withButtons ? buttons(config, key, dynamic, choices, labels).map(row => key === 'lobby' && input.scene === 'c2c' ? row.filter(b => b.action !== 'duo' && b.action !== 'multi') : row).filter(row => row.length) : [] };
     }
 
     return { message, maxBytes };
