@@ -58,7 +58,9 @@ export async function coordinateCreate(ctx: PluginContext, input: CreateInput, e
     }
 
     const result = await room.create(input, name.value, name.value ? 0 : name.nextLookup ?? Date.now() + 30000, ctx.publicUrl);
-    refreshName(ctx, room, registry, { gameId: input.gameId, groupId: input.groupId, userId: input.member.id, claimId: input.gameId }, name);
+
+    if (input.channel !== 'web') { refreshName(ctx, room, registry, { gameId: input.gameId, groupId: input.groupId, userId: input.member.id, claimId: input.gameId }, name); }
+
     await ctx.db.run('UPDATE {coord_ops} SET state=? WHERE bot=? AND game_id=? AND id=?', 'CREATE_ACCEPTED', ctx.botId, input.gameId, `create:${input.gameId}`);
 
     if (input.mode === 'solo') {
@@ -124,7 +126,9 @@ export async function coordinateJoin(ctx: PluginContext, group: string, request:
     }
 
     const roomMs = Date.now() - admittedAt;
-    refreshName(ctx, room, registry, { gameId: request.gameId, groupId: group, userId: request.actor, claimId: request.actionId }, name);
+
+    if (!result.web) { refreshName(ctx, room, registry, { gameId: request.gameId, groupId: group, userId: request.actor, claimId: request.actionId }, name); }
+
     await ctx.db.run('UPDATE {coord_ops} SET state=? WHERE bot=? AND game_id=? AND id=?', 'DONE', ctx.botId, request.gameId, request.actionId);
 
     ctx.logger.debug('加入房间耗时', { coordinationMs: admittedAt - started, roomMs, totalMs: Date.now() - started });
@@ -140,7 +144,7 @@ export async function drain(ctx: PluginContext, group: string, session?: Session
     // SDK 一次发送最多占用约 20 秒；8 秒后不再领取新任务，给宿主生命周期留出余量。
     const budget = options.budget ?? { deadline: Date.now() + 8000, passiveReplies: 0, remaining: 24 };
     const deadline = budget.deadline;
-    let work = initial ?? await room.work(undefined, undefined, true, true, true);
+    let work = initial ?? await room.work(undefined, undefined, true, true, true, true);
 
     if (!work) { return { room: null, moves: [], panelHandled: false }; }
 
@@ -150,9 +154,9 @@ export async function drain(ctx: PluginContext, group: string, session?: Session
     }
 
     if (work.moneyDue) {
-        await processMoney(ctx, room, work);
+        const next = await processMoney(ctx, room, work, !work.task && Date.now() < deadline);
 
-        if (!work.task) { work = await room.work(work.gameId, undefined, Date.now() < deadline, true, true); }
+        if (!work.task) { work = next ?? await room.work(work.gameId, undefined, Date.now() < deadline, true, true); }
     }
 
     if (work) { cleanupSoon(ctx, group, work.recallDue); }
@@ -255,7 +259,9 @@ export async function cron(ctx: PluginContext): Promise<void> {
     const stopAt = Date.now() + 20000;
     const batch = await recoveryBatch(ctx);
     ctx.waitUntil(recoverMessages(ctx, batch.cleanup));
-    await ctx.db.run('DELETE FROM {coord_ops} WHERE rowid IN (SELECT rowid FROM {coord_ops} WHERE bot=? AND state IN (?,?) AND expires_at<=? LIMIT 20)', ctx.botId, 'CREATE_READY', 'NAVIGATION', Date.now());
+
+    if (batch.expired) { await ctx.db.run('DELETE FROM {coord_ops} WHERE rowid IN (SELECT rowid FROM {coord_ops} WHERE bot=? AND state IN (?,?) AND expires_at<=? LIMIT 20)', ctx.botId, 'CREATE_READY', 'NAVIGATION', Date.now()); }
+
     const pending = batch.joins;
 
     for (const row of pending) {

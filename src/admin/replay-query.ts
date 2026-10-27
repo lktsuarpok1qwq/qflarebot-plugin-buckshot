@@ -32,7 +32,7 @@ function replayRangeHint() {
 
 // 仅当前页面保留最多四个范围、合计 4000 条元数据；正文不进入列表缓存。
 const replayRangeCache = new Map();
-let replayListCached = false;
+let replayListCached = false, replaySkippedDays = '';
 
 function replayRangeKey() {
     const range = replayRange();
@@ -46,7 +46,7 @@ function rememberReplayRange() {
 
     if (replayListItems.length > 4000) { return; }
 
-    replayRangeCache.set(key, { items: replayListItems.slice(), complete: replayListComplete, next: replayNextCursor });
+    replayRangeCache.set(key, { items: replayListItems.slice(), complete: replayListComplete, next: replayNextCursor, skip: replaySkippedDays });
     let count = [...replayRangeCache.values()].reduce((sum, value) => sum + value.items.length, 0);
 
     while (replayRangeCache.size > 4 || count > 4000) {
@@ -68,6 +68,7 @@ function invalidateReplayList() {
     replayListCached = false;
     replayListComplete = true;
     replayNextCursor = null;
+    replaySkippedDays = '';
     replayPageIndex = 0;
     $('replayList').textContent = '查询';
     $('replayNotice').textContent = '时间范围已变化，请查询';
@@ -83,6 +84,7 @@ function invalidateReplayList() {
             replayListCached = true;
             replayListComplete = saved.complete;
             replayNextCursor = saved.next;
+            replaySkippedDays = saved.skip || '';
             $('replayList').textContent = '重新查询';
         }
     }
@@ -137,9 +139,29 @@ async function queryReplayList(more = false) {
     replayBusy = true;
 
     if (!more) {
-        replayRangeCache.delete(replayRangeKey());
+        const key = replayRangeKey(), reused = new Map(), days = new Set();
+
+        // 主动重新查询同一范围时刷新全部；新范围仅复用已确认完整的日期。
+        if (!replayRangeCache.has(key)) {
+            for (const [savedKey, saved] of replayRangeCache) {
+                if (!saved.complete) { continue; }
+
+                const [from, to] = savedKey.split('/');
+
+                for (let day = from; day <= to; day = replayDay(day, 1)) {
+                    if (day >= range.start && day <= range.end) { days.add(day); }
+                }
+
+                for (const item of saved.items) {
+                    if (item.date >= range.start && item.date <= range.end) { reused.set(item.key, item); }
+                }
+            }
+        }
+
+        replaySkippedDays = [...days].sort().join(',');
+        replayRangeCache.delete(key);
         replayListCached = false;
-        replayListItems = [];
+        replayListItems = [...reused.values()];
         replayListLoaded = false;
         replayListComplete = true;
         replayNextCursor = null;
@@ -148,7 +170,7 @@ async function queryReplayList(more = false) {
 
     renderReplayList();
     $('replayNotice').textContent = more ? '正在加载更多记录' : '正在查询';
-    const query = new URLSearchParams({ ...range, ...(cursor ? { cursor } : {}) });
+    const query = new URLSearchParams({ ...range, ...(cursor ? { cursor } : {}), ...(replaySkippedDays ? { skip: replaySkippedDays } : {}) });
 
     try {
         const r = await api('/api/replays?' + query);

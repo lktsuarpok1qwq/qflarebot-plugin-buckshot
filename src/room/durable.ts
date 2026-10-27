@@ -1,3 +1,5 @@
+import { webAccess, claimable, secret, digest, encodeLocator, WEB_LIFETIME } from '../web/access.js';
+import { webView, webMove, webProjection } from '../web/state.js';
 import { completeChoices, expireRecalls, nextRecall, registerRecall, type RecallReceipt, type RecallState } from './recalls.js';
 import { moneyReason } from './money-reason.js';
 import { formatPoints } from '../amounts.js';
@@ -15,21 +17,211 @@ import { requireRule, secureRandom } from '../game/types.js';
 import { legalActions } from '../game/engine.js';
 import type { CreateInput, MoneyTask, PanelReceipt, Request, RoomState, Task } from './model.js';
 import { localWake, workDue, canClose } from './schedule.js';
-import { blockClock, cancelGame, clock, mutate, playerName, enqueue, startGame, tick, view } from './state.js';
+import { blockClock, cancelGame, clock, mutate, playerName, enqueue, reserve, startGame, tick, view } from './state.js';
 import { cleanName } from './names.js';
 import { StoredObject } from './storage.js';
 import { prepareDelivery } from './outbox.js';
 
+type WebReply = { actor: string; hash: string; view?: ReturnType<typeof webView> };
+
 export class BuckshotRoom extends StoredObject {
+    private webRates = new Map<string, { at: number; count: number }>();
+
+    private webLimit(actor: string, limit = 12) {
+        const now = Date.now(), saved = this.webRates.get(actor);
+        const bucket = saved && saved.at + 1000 > now ? saved : { at: now, count: 0 };
+        requireRule(++bucket.count <= limit, '请求过快，请稍后再试');
+        this.webRates.set(actor, bucket);
+    }
+
+    async webIssue(game: string, actor: string, event: string, delivery = false, identity?: { claimId: string; name: string }) {
+        const raw = secret(), hash = await digest(raw);
+
+        return this.change(() => {
+            const s = this.state(game);
+            claimable(s);
+            requireRule(s.members.some(m => m.id === actor), '你不在本局');
+
+            if (identity) { this.setName(s, actor, identity.claimId, cleanName(identity.name), 0); }
+
+            const access = s.web!.access[actor] ??= {};
+
+            if (access.ticket?.event === event) {
+                if (delivery && access.ticket.deliveryState) { return ''; }
+
+                requireRule(access.ticket.expires > Date.now() && !access.ticket.used, '链接已领取，请重新发送进入命令');
+
+                if (delivery) { access.ticket.deliveryState = 'SENDING'; }
+
+                return access.ticket.delivery;
+            }
+
+            this.webLimit('issue:' + actor, 3);
+            const locator = encodeLocator(s.groupId, s.gameId, actor, raw);
+            access.ticket = { digest: hash, event, expires: Date.now() + 300000, delivery: locator, ...(delivery ? { deliveryState: 'SENDING' as const } : {}) };
+
+            return locator;
+        });
+    }
+
+    async webEntry(game: string, actor: string, event: string, claimId: string, name: string) {
+        const ticket = await this.webIssue(game, actor, event, true, { claimId, name });
+
+        return { ticket, recallSeconds: this.latestState!.config.values.recallSeconds };
+    }
+
+    async webDeliveryResult(game: string, actor: string, event: string, outcome: 'SENT' | 'FAILED' | 'UNKNOWN', receipt?: RecallReceipt) {
+        return this.change(() => {
+            const s = this.state(game), ticket = s.web?.access[actor]?.ticket;
+
+            if (ticket?.event === event && ticket.deliveryState === 'SENDING') { ticket.deliveryState = outcome; }
+
+            if (receipt) {
+                requireRule(outcome === 'SENT' && receipt.gameId === game && receipt.owner === actor && receipt.navigation === event && receipt.target === 'c2c:' + actor, '网页回执不符');
+                this.registerMessage(s.botId, s.groupId, receipt);
+            }
+
+            return this.recallDue();
+        });
+    }
+
+    async webRedeem(game: string, actor: string, key: string, proof: string) {
+        requireRule(/^[a-f0-9]{64}$/.test(proof), '兑换请求无效');
+        const hash = await digest(key), proofHash = await digest(proof);
+        const sessionKey = await digest(key + ':' + proof), sessionHash = await digest(sessionKey);
+        await this.change(() => {
+            const s = this.state(game);
+            claimable(s);
+            requireRule(s.web?.access[actor], '入口无效');
+            this.webLimit(actor);
+            const access = s.web!.access[actor], ticket = access?.ticket;
+            requireRule(ticket && ticket.digest === hash && ticket.expires > Date.now(), '入口已过期，请私聊重新领取');
+
+            if (ticket.used) {
+                requireRule(ticket.proof === proofHash && access.session?.digest === sessionHash, '入口已使用，请私聊重新领取');
+
+                return;
+            }
+
+            ticket.used = true;
+            ticket.proof = proofHash;
+            ticket.delivery = '';
+            access.session = { digest: sessionHash, expires: Date.now() + WEB_LIFETIME, generation: (access.session?.generation ?? 0) + 1, ready: false };
+        });
+
+        return sessionKey;
+    }
+
+    webSnapshot(game: string, actor: string, hash: string, checkRate = true) {
+        const s = this.latestState ?? this.state(game);
+        requireRule(s.gameId === game, '对局已失效');
+        webAccess(s, actor, hash);
+
+        if (checkRate) { this.webLimit(actor); }
+
+        return webView(s, actor);
+    }
+
+    async webReady(game: string, actor: string, hash: string) {
+        const reply: WebReply = { actor, hash };
+        await this.change(() => {
+            const s = this.state(game), session = webAccess(s, actor, hash);
+            this.webLimit(actor);
+
+            if (session.ready) { return; }
+
+            claimable(s);
+            session.ready = true;
+
+            if (s.status === 'WEB_JOINING' && s.members.every(m => s.web!.access[m.id]?.session?.ready)) {
+                if (s.stake) { reserve(s, Date.now()); } else { startGame(s, Date.now()); }
+            }
+
+            s.version++;
+            clock(s, Date.now());
+        }, false, reply);
+
+        return reply.view!;
+    }
+
+    async webAction(game: string, actor: string, hash: string, actionId: string, version: number, action: Request['action']) {
+        const reply: WebReply = { actor, hash };
+        let error: string | undefined;
+        await this.change(() => {
+            const s = this.state(game);
+            webAccess(s, actor, hash);
+            this.webLimit(actor);
+            requireRule(['play', 'confirmQuit', 'quit', 'confirmClose', 'close', 'leave'].includes(action?.type), '操作无效');
+            const value = action.type === 'play' ? { type: 'play' as const, move: webMove(s, action.move) } : { type: action.type } as Request['action'];
+            const outcome = this.execute({ gameId: game, actor, actionId, expectedVersion: version, action: value });
+
+            if ('error' in outcome) { error = outcome.error; }
+
+            clock(this.state(game), Date.now());
+        }, false, reply);
+
+        return { ...reply.view!, error };
+    }
+
+    async webLogout(game: string, actor: string, hash: string) {
+        await this.change(() => {
+            const s = this.state(game);
+            webAccess(s, actor, hash);
+            delete s.web!.access[actor].session;
+        });
+    }
+
+    async fetch(request: globalThis.Request): Promise<Response> {
+        requireRule(request.headers.get('Upgrade')?.toLowerCase() === 'websocket', '仅支持状态同步');
+        const game = request.headers.get('x-game')!, actor = request.headers.get('x-player')!, hash = request.headers.get('x-session')!;
+        const snapshot = this.webSnapshot(game, actor, hash);
+        const peers = this.ctx.getWebSockets(actor);
+
+        for (const peer of peers) { peer.close(1000, '连接已替换'); }
+
+        const pair = new WebSocketPair(), [client, server] = Object.values(pair);
+        this.ctx.acceptWebSocket(server, [actor]);
+        server.serializeAttachment({ game, actor, hash });
+        server.send(JSON.stringify(snapshot));
+
+        return new Response(null, { status: 101, webSocket: client });
+    }
+
+    webSocketMessage(socket: WebSocket) { socket.close(1008, '动作请使用 HTTP'); }
+
+    webSocketClose(socket: WebSocket) { try { socket.close(); } catch { /* 对端已经关闭。 */ } }
+
+    webSocketError(socket: WebSocket) { try { socket.close(1011); } catch { /* 对端已经关闭。 */ } }
+
+    private broadcastWeb(s: RoomState, project = webProjection(s)) {
+        if (!s.web || !this.ctx.getWebSockets) { return; }
+
+        for (const socket of this.ctx.getWebSockets()) {
+            try {
+                const { game, actor, hash } = socket.deserializeAttachment();
+                requireRule(game === s.gameId, '对局已更换');
+                webAccess(s, actor, hash);
+                socket.send(JSON.stringify(project(actor)));
+
+                if (s.status === 'CLOSED' && (!s.replay || s.web.replayReady) || s.status === 'CANCELLED') { socket.close(1000, '对局已结束'); }
+            } catch { try { socket.close(1008, '会话已失效'); } catch { /* 无可用连接。 */ } }
+        }
+    }
+
     private journal: ReplayJournal;
     private statisticsJournal: StatisticsJournal;
     private replaySteps: ReplayStep[] = [];
     private recordedStep = false;
     private index: RoomIndex;
     private latestState?: RoomState;
+    private cleanupSaved?: { text: string | undefined };
+
+    protected storedText(id: string): string | undefined {
+        return id === 'message-cleanup' && this.cleanupSaved ? this.cleanupSaved.text : super.storedText(id);
+    }
 
     constructor(state: DurableObjectState, env: unknown) {
-        super(state, env, [...ReplayJournal.schema, ...StatisticsJournal.schema]);
+        super(state, env, [...ReplayJournal.schema, ...StatisticsJournal.schema], 3);
         this.journal = new ReplayJournal(state.storage, state.id?.toString());
         this.statisticsJournal = new StatisticsJournal(state.storage);
         this.index = new RoomIndex(() => this.plugin.db, job => this.ctx.waitUntil(job), snapshot => this.indexPublished(snapshot), () => this.plugin.logger.warn('房间发现索引等待恢复'));
@@ -61,9 +253,9 @@ export class BuckshotRoom extends StoredObject {
     }
 
     // 状态与恢复 Alarm 同一事务落盘；D1 是可重建的发现索引，发布失败由 Alarm 续做。
-    private async change<T>(fn: () => T, publishWork = false): Promise<T> {
+    private async change<T>(fn: () => T, publishWork = false, reply?: WebReply): Promise<T> {
         const completed = await this.ctx.blockConcurrencyWhile(async () => {
-            let state: RoomState | undefined;
+            let state: RoomState | undefined, changed = false, cleanupText: string | undefined;
             const result = await this.ctx.storage.transaction(async () => {
                 this.cache = new Map();
                 this.pending = new Map();
@@ -80,6 +272,18 @@ export class BuckshotRoom extends StoredObject {
                 try {
                     const result = fn();
                     state = this.cache.get('room') as RoomState | undefined;
+
+                    if (state?.web) {
+                        if (state.game?.finished || ['CLOSED', 'CANCELLED'].includes(state.status)) { state.web.endedAt ??= Date.now(); }
+
+                        for (const access of Object.values(state.web.access)) {
+                            if (access.ticket && access.ticket.expires <= Date.now()) { delete access.ticket; }
+
+                            if (access.session && (access.session.expires <= Date.now() || state.web.endedAt && state.web.endedAt + 900000 <= Date.now())) { delete access.session; }
+                        }
+
+                        if (state.status === 'CLOSED' && state.replay && !state.web.replayReady && !this.journal.pending(state.gameId)) { state.web.replayReady = true; }
+                    }
 
                     if (state) { this.index.enter(state); }
 
@@ -101,6 +305,13 @@ export class BuckshotRoom extends StoredObject {
                     }
 
                     if (state) {
+                        delete state.replayIntel;
+                        delete state.operationEvents;
+                    }
+
+                    if (state?.web) { state.outbox = state.outbox.filter(t => t.state !== 'SENT'); }
+
+                    if (state) {
                         const due = workDue(state, Date.now());
 
                         if (state.indexStatus !== state.status || state.indexDue !== due) {
@@ -113,7 +324,9 @@ export class BuckshotRoom extends StoredObject {
 
                         roomText = JSON.stringify(state);
 
-                        if (roomText !== original) { this.pending.set('room', state); } else { this.pending.delete('room'); }
+                        changed = roomText !== original;
+
+                        if (changed) { this.pending.set('room', state); } else { this.pending.delete('room'); }
                     }
 
                     if (state && ['CANCELLED', 'CLOSED'].includes(state.status)) {
@@ -130,8 +343,12 @@ export class BuckshotRoom extends StoredObject {
                     this.pending = undefined;
 
                     for (const [id, value] of writes) {
-                        this.ctx.storage.sql.exec('INSERT INTO state(id,value) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value', id, id === 'room' ? roomText! : JSON.stringify(value));
+                        const text = id === 'room' ? roomText! : JSON.stringify(value);
+                        this.ctx.storage.sql.exec('INSERT INTO state(id,value) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value', id, text);
+                        this.encoded!.set(id, text);
                     }
+
+                    cleanupText = this.encoded!.get('message-cleanup');
 
                     return result;
                 } finally {
@@ -143,13 +360,25 @@ export class BuckshotRoom extends StoredObject {
                 }
             });
             this.latestState = state;
+            this.cleanupSaved = { text: cleanupText };
             const snapshot: IndexSnapshot | undefined = state && this.index.dirty(state) && !this.index.deferred(state, publishWork)
                 ? { botId: state.botId, groupId: state.groupId, gameId: state.gameId, status: state.status, indexDue: state.indexDue, indexVersion: state.indexVersion } : undefined;
 
-            return { result, snapshot };
+            return { result, snapshot, state, changed };
         });
 
         if (completed.snapshot) { this.index.enqueue(completed.snapshot); }
+
+        if (completed.state?.web && (reply || completed.changed && this.ctx.getWebSockets?.().length)) {
+            const project = webProjection(completed.state);
+
+            if (completed.changed) { this.broadcastWeb(completed.state, project); }
+
+            if (reply) {
+                webAccess(completed.state, reply.actor, reply.hash);
+                reply.view = project(reply.actor);
+            }
+        }
 
         return completed.result;
     }
@@ -181,7 +410,7 @@ export class BuckshotRoom extends StoredObject {
     // 清理仅改变队列；房间只用于确认失效与恢复调度，暖实例复用上次提交的状态。
     private async changeRecalls<T>(fn: () => T): Promise<T> {
         return this.ctx.blockConcurrencyWhile(async () => {
-            let room: RoomState | undefined;
+            let room: RoomState | undefined, cleanupText: string | undefined;
 
             try {
                 const result = await this.ctx.storage.transaction(async () => {
@@ -196,8 +425,10 @@ export class BuckshotRoom extends StoredObject {
                     const result = fn();
                     const next = this.read<RecallState>('message-cleanup');
 
+                    cleanupText = next ? JSON.stringify(next) : undefined;
+
                     if (next) {
-                        const text = JSON.stringify(next);
+                        const text = cleanupText!;
 
                         if (text !== this.encoded.get('message-cleanup')) {
                             this.ctx.storage.sql.exec('INSERT INTO state(id,value) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value', 'message-cleanup', text);
@@ -209,6 +440,7 @@ export class BuckshotRoom extends StoredObject {
                     return result;
                 });
                 this.latestState = room;
+                this.cleanupSaved = { text: cleanupText };
 
                 return result;
             } finally {
@@ -334,6 +566,11 @@ export class BuckshotRoom extends StoredObject {
             };
             s.statistics = freshCounters();
 
+            if (input.channel === 'web') {
+                requireRule(!input.groupId.startsWith('c2c:'), '私聊房间使用 QQ 对战');
+                s.web = { access: {}, sequence: 0 };
+            }
+
             if (replayBase) { s.replayBase = replayBase; }
 
             this.write('room', s);
@@ -345,32 +582,33 @@ export class BuckshotRoom extends StoredObject {
 
     isClosed(gameId: string): boolean { return !!this.read(`closed:${gameId}`); }
 
-    async updateName(gameId: string, actor: string, claimId: string, name: string, nextLookup = 0): Promise<boolean> {
-        const value = cleanName(name);
+    private setName(s: RoomState, actor: string, claimId: string, value: string, nextLookup: number): boolean {
+        if (!['WAITING', 'WEB_JOINING', 'PREPARING', 'PLAYING'].includes(s.status)) { return false; }
 
+        const member = s.members.find(m => m.id === actor && (m.claimId ?? s.gameId) === claimId);
+
+        if (!member) { return false; }
+
+        if (!value) {
+            if (member.nameLookupAt !== 0) { member.nameLookupAt = Math.max(member.nameLookupAt ?? 0, nextLookup); }
+
+            return false;
+        }
+
+        member.name = value;
+        member.nameLookupAt = 0;
+        const player = s.game?.players.find(p => p.id === actor);
+
+        if (player) { player.name = value; }
+
+        return true;
+    }
+
+    async updateName(gameId: string, actor: string, claimId: string, name: string, nextLookup = 0): Promise<boolean> {
         return this.change(() => {
             const s = this.read<RoomState>('room');
 
-            if (!s || s.gameId !== gameId || !['WAITING', 'PREPARING', 'PLAYING'].includes(s.status)) { return false; }
-
-            const member = s.members.find(m => m.id === actor && (m.claimId ?? s.gameId) === claimId);
-
-            if (!member) { return false; }
-
-            // 空结果只延后缺名补查，不能清除已保存的昵称。
-            if (!value) {
-                if (member.nameLookupAt !== 0) { member.nameLookupAt = Math.max(member.nameLookupAt ?? 0, nextLookup); }
-
-                return false;
-            }
-
-            member.name = value;
-            member.nameLookupAt = 0;
-            const player = s.game?.players.find(p => p.id === actor);
-
-            if (player) { player.name = value; }
-
-            return true;
+            return !!s && s.gameId === gameId && this.setName(s, actor, claimId, cleanName(name), nextLookup);
         });
     }
 
@@ -400,7 +638,9 @@ export class BuckshotRoom extends StoredObject {
     menu(gameId: string, actor: string) {
         identifier(gameId);
         identifier(actor);
-        const s = this.state(gameId), room = view(s), player = s.game?.players.find(p => p.id === actor);
+        const s = this.state(gameId);
+        requireRule(!s.web || s.status === 'WAITING', '请私聊领取网页链接操作');
+        const room = view(s), player = s.game?.players.find(p => p.id === actor);
         const reason = !s.members.some(m => m.id === actor) ? 'menuSpectator'
             : ['FINISHED', 'SETTLED', 'CANCELLED', 'CLOSED'].includes(s.status) || s.game?.finished ? 'menuEnded'
                 : s.recovery ? 'menuRecovery' : s.paused ? 'menuPaused'
@@ -415,6 +655,7 @@ export class BuckshotRoom extends StoredObject {
 
     async act(request: Request, deliveryOnly = false) {
         const result = await this.change(() => {
+            requireRule(!this.state(request.gameId).web || !['play', 'confirmQuit', 'quit'].includes(request.action.type), '请私聊领取网页链接操作');
             const outcome = this.execute(request);
 
             if ('error' in outcome) { return { error: outcome.error, room: view(this.state(request.gameId)) }; }
@@ -432,7 +673,7 @@ export class BuckshotRoom extends StoredObject {
     }
 
     publicState() {
-        const s = this.read<RoomState>('room');
+        const s = this.latestState ?? this.read<RoomState>('room');
 
         return s ? view(s) : null;
     }
@@ -450,7 +691,7 @@ export class BuckshotRoom extends StoredObject {
 
         if (!s || s.status === 'CLOSED' || Math.floor(timestamp / 1000) < Math.floor(s.createdAt / 1000)) { return false; }
 
-        if (target && (!['WAITING', 'PREPARING', 'PLAYING'].includes(s.status) || !s.members.some(m => m.id === target))) { return false; }
+        if (target && (!['WAITING', 'WEB_JOINING', 'PREPARING', 'PLAYING'].includes(s.status) || !s.members.some(m => m.id === target))) { return false; }
 
         await this.command({ gameId: s.gameId, expectedVersion: s.version, actionId, actor: 'admin', action: target ? { type: 'removed', target } : { type: 'abort' } }, true);
 
@@ -467,10 +708,10 @@ export class BuckshotRoom extends StoredObject {
         if (prior) {
             requireRule(prior.request === serialized, '操作编号冲突');
 
-            return JSON.parse(prior.result) as { version: number; status: RoomState['status'] } | { error: string };
+            return JSON.parse(prior.result) as { version: number; status: RoomState['status']; web?: boolean } | { error: string };
         }
 
-        let value: { version: number; status: RoomState['status'] } | { error: string };
+        let value: { version: number; status: RoomState['status']; web?: boolean } | { error: string };
         const unchanged = this.encoded!.get('room')!;
 
         try {
@@ -483,7 +724,7 @@ export class BuckshotRoom extends StoredObject {
 
             if (!repeatedReady && !['confirmQuit', 'confirmClose', 'retry', 'reconcile'].includes(action.type) && !(action.type === 'start' && s.status === 'PREPARING')) { this.recordStep(s, recorded, request.actor, previousSeq); }
 
-            value = { version: s.version, status: s.status };
+            value = { version: s.version, status: s.status, web: !!s.web };
             this.write('room', s);
         } catch (error) {
             this.cache!.set('room', JSON.parse(unchanged));
@@ -557,11 +798,25 @@ export class BuckshotRoom extends StoredObject {
             } catch { this.plugin.logger.warn('消息清理索引等待恢复', { code: 'RECALL_INDEX_PENDING' }); }
         }
 
-        try { await this.statisticsJournal.publish(this.plugin.db); } catch { this.plugin.logger.warn('统计发布未确认，保留原摘要等待重试'); }
+        let publishing = false;
+        const statisticsDue = this.statisticsJournal.nextDue();
 
-        try { await this.journal.archive(this.plugin.r2, this.plugin.db); } catch { this.plugin.logger.warn('回放保存未确认，保留原记录等待重试'); }
+        if (statisticsDue !== null && statisticsDue <= Date.now()) {
+            publishing = true;
 
-        await this.refreshSchedule();
+            try { await this.statisticsJournal.publish(this.plugin.db); } catch { this.plugin.logger.warn('统计发布未确认，保留原摘要等待重试'); }
+        }
+
+        const replayDue = this.journal.nextDue();
+
+        if (replayDue !== null && replayDue <= Date.now()) {
+            publishing = true;
+
+            try { await this.journal.archive(this.plugin.r2, this.plugin.db); } catch { this.plugin.logger.warn('回放保存未确认，保留原记录等待重试'); }
+        }
+
+        // 普通动画与 AI 唤醒已在首个事务安排后续 Alarm；外部归档改变待办后才再次协调。
+        if (publishing) { await this.refreshSchedule(); }
     }
 
     async claimMessage(gameId: string): Promise<Task | null> {
@@ -598,7 +853,7 @@ export class BuckshotRoom extends StoredObject {
     private retirePanel(s: RoomState): string[] {
         const old = this.read<PanelReceipt>('panel');
 
-        if (!old?.messageId || old.gameId !== s.gameId || !['WAITING', 'PREPARING', 'PLAYING'].includes(old.status)) { return []; }
+        if (!old?.messageId || old.gameId !== s.gameId || !['WAITING', 'WEB_JOINING', 'PREPARING', 'PLAYING'].includes(old.status)) { return []; }
 
         this.write('panel', { ...old, version: s.version, messageId: '' });
 
@@ -660,6 +915,13 @@ export class BuckshotRoom extends StoredObject {
             blockClock(s, Date.now());
         }
 
+        if (s.web && !task.critical && task.kind === 'message' && outcome !== 'SENT') {
+            // 明确拒绝最多重试一次；未知投递不盲发，不能阻塞已确认的资金结算。
+            if (outcome === 'FAILED' && task.attempts < 2) { task.state = 'PENDING'; }
+
+            this.plugin.logger.warn('网页对局结束通知未确认', { gameId: s.gameId, taskId: task.id, outcome, attempts: task.attempts, code: errorCode });
+        }
+
         // 群消息清理由当前请求的 SDK waitUntil 执行，不把成功消息累积成历史。
         s.outbox = s.outbox.filter(t => t.state !== 'SENT');
         clock(s, Date.now());
@@ -686,10 +948,10 @@ export class BuckshotRoom extends StoredObject {
 
         if (cleanup && expireRecalls(cleanup, s, Date.now())) { this.write('message-cleanup', cleanup); }
 
-        return { ...prepareDelivery(s, claim, deliveryOnly), recallDue: this.recallDue() };
+        return { ...prepareDelivery(s, claim, deliveryOnly), recallDue: this.recallDue(), moneyTask: undefined as MoneyTask | null | undefined };
     }
 
-    async work(gameId?: string, ack?: { id: string; lease: string; outcome: 'SENT' | 'FAILED' | 'UNKNOWN'; messageId?: string; errorCode?: string; sentAt?: number }, claim = true, immediateAI = false, deliveryOnly = false) {
+    async work(gameId?: string, ack?: { id: string; lease: string; outcome: 'SENT' | 'FAILED' | 'UNKNOWN'; messageId?: string; errorCode?: string; sentAt?: number }, claim = true, immediateAI = false, deliveryOnly = false, claimFunds = false) {
         return this.change(() => {
             const s = this.read<RoomState>('room');
 
@@ -699,7 +961,10 @@ export class BuckshotRoom extends StoredObject {
 
             const discardPanels = ack ? this.ack(s, ack.id, ack.lease, ack.outcome, ack.messageId, ack.errorCode, ack.sentAt) : [];
 
-            return { ...this.prepareWork(s, claim, claim && immediateAI && (!ack || ack.outcome === 'SENT'), deliveryOnly), discardPanels };
+            const work = this.prepareWork(s, claim, claim && immediateAI && (!ack || ack.outcome === 'SENT'), deliveryOnly);
+            const moneyTask = claimFunds && work.moneyDue ? this.takeMoney(s) : undefined;
+
+            return { ...work, discardPanels, moneyTask };
         });
     }
 
@@ -710,64 +975,62 @@ export class BuckshotRoom extends StoredObject {
     }
 
     async claimMoney(gameId: string): Promise<MoneyTask | null> {
-        const result = await this.change(() => {
-            const s = this.state(gameId);
-
-            if (!s.money.length && !s.stake) { return null; }
-
-            const now = Date.now();
-            this.tick(s, now);
-
-            for (const t of s.money) { if (t.state === 'SENDING' && t.leaseUntil! <= now) { t.state = 'UNKNOWN'; } }
-
-            if (s.reserved && s.reserveUntil! - now <= 3600000 && s.status === 'PLAYING' && !s.money.some(t => t.state !== 'DONE')) {
-                const expiresAtMs = Math.min(now + 86400000, s.reserveAt! + 180 * 86400000);
-
-                if (expiresAtMs <= now + 3600000) {
-                    cancelGame(s, now);
-                } else {
-                    s.renewal++;
-                    s.members.forEach((_, i) => s.money.push({
-                        id: `${s.gameId}:renew:${s.renewal}:${i}`, kind: 'renew', state: 'PENDING', input: {
-                            source: 'buckshot', operationId: `${s.gameId}:renew:${s.renewal}:${i}`, reservationId: `${s.gameId}:r:${i}`, expiresAtMs,
-                            reason: moneyReason(s, 'renew')
-                        }
-                    }));
-                }
-            }
-
-            if (s.status === 'SETTLING') {
-                for (const t of s.money) {
-                    if (t.kind === 'renew' && t.state === 'FAILED') {
-                        t.state = 'DONE';
-                        t.evidence = '续期确定拒绝，继续核对既有本金';
-                        t.resolution = 'rejected';
-                    }
-                }
-            }
-
-            const t = s.money.find(t => t.state !== 'DONE');
-
-            if (!t || t.state === 'SENDING' || t.state === 'FAILED' || t.state === 'UNKNOWN' && (t.retryAt ?? 0) > now) {
-                this.write('room', s);
-
-                return null;
-            }
-
-            const prior = structuredClone(t);
-            t.state = 'SENDING';
-            t.lease = crypto.randomUUID();
-            t.leaseUntil = now + 60000;
-            this.write('room', s);
-
-            return { ...t, state: prior.state };
-        });
-
-        return result;
+        return this.change(() => this.takeMoney(this.state(gameId)));
     }
 
-    async moneyResult(gameId: string, taskId: string, lease: string, outcome: 'DONE' | 'UNKNOWN' | 'FAILED', evidence?: string, resolution: 'committed' | 'inactive' | 'rejected' = 'committed'): Promise<void> {
-        await this.change(() => {
+    private takeMoney(s: RoomState): MoneyTask | null {
+        if (!s.money.length && !s.stake) { return null; }
+
+        const now = Date.now();
+        this.tick(s, now);
+
+        for (const t of s.money) { if (t.state === 'SENDING' && t.leaseUntil! <= now) { t.state = 'UNKNOWN'; } }
+
+        if (s.reserved && s.reserveUntil! - now <= 3600000 && s.status === 'PLAYING' && !s.money.some(t => t.state !== 'DONE')) {
+            const expiresAtMs = Math.min(now + 86400000, s.reserveAt! + 180 * 86400000);
+
+            if (expiresAtMs <= now + 3600000) {
+                cancelGame(s, now);
+            } else {
+                s.renewal++;
+                s.members.forEach((_, i) => s.money.push({
+                    id: `${s.gameId}:renew:${s.renewal}:${i}`, kind: 'renew', state: 'PENDING', input: {
+                        source: 'buckshot', operationId: `${s.gameId}:renew:${s.renewal}:${i}`, reservationId: `${s.gameId}:r:${i}`, expiresAtMs,
+                        reason: moneyReason(s, 'renew')
+                    }
+                }));
+            }
+        }
+
+        if (s.status === 'SETTLING') {
+            for (const t of s.money) {
+                if (t.kind === 'renew' && t.state === 'FAILED') {
+                    t.state = 'DONE';
+                    t.evidence = '续期确定拒绝，继续核对既有本金';
+                    t.resolution = 'rejected';
+                }
+            }
+        }
+
+        const t = s.money.find(t => t.state !== 'DONE');
+
+        if (!t || t.state === 'SENDING' || t.state === 'FAILED' || t.state === 'UNKNOWN' && (t.retryAt ?? 0) > now) {
+            this.write('room', s);
+
+            return null;
+        }
+
+        const prior = structuredClone(t);
+        t.state = 'SENDING';
+        t.lease = crypto.randomUUID();
+        t.leaseUntil = now + 60000;
+        this.write('room', s);
+
+        return { ...t, state: prior.state };
+    }
+
+    async moneyResult(gameId: string, taskId: string, lease: string, outcome: 'DONE' | 'UNKNOWN' | 'FAILED', evidence?: string, resolution: 'committed' | 'inactive' | 'rejected' = 'committed', nextWork = false) {
+        return this.change(() => {
             const s = this.state(gameId), t = s.money.find(t => t.id === taskId);
             requireRule(t?.state === 'SENDING' && t.lease === lease && t.leaseUntil! > Date.now(), '资金租约失效');
             t.state = outcome;
@@ -784,7 +1047,9 @@ export class BuckshotRoom extends StoredObject {
             if (outcome === 'DONE') {
                 if (t.kind === 'credit') {
                     requireRule(resolution === 'committed', '挑战奖励缺少到账依据');
-                    enqueue(s, '', true).parts = [{ key: 'dailyRewardPaid', values: { amount: formatPoints((t.input as { amountMinor: number }).amountMinor), gameId: s.gameId } }];
+                    const task = enqueue(s, '', !s.web);
+                    task.state = 'PENDING';
+                    task.parts = [{ key: 'dailyRewardPaid', values: { amount: formatPoints((t.input as { amountMinor: number }).amountMinor), gameId: s.gameId } }];
                 }
 
                 if (t.kind === 'reserve') {
@@ -808,6 +1073,8 @@ export class BuckshotRoom extends StoredObject {
             }
 
             this.write('room', s);
+
+            return nextWork ? { ...this.prepareWork(s, true, false, true), moneyTask: undefined } : undefined;
         });
     }
 

@@ -56,8 +56,8 @@ async function execute(service: PointsService, task: MoneyTask, state: Pick<Room
     return service.renewReservation(task.input as Parameters<PointsService['renewReservation']>[0]);
 }
 
-export async function processMoney(ctx: PluginContext, room: DurableObjectStub<BuckshotRoom>, state: Pick<RoomState, 'gameId' | 'stake' | 'mode'>): Promise<void> {
-    const task = await room.claimMoney(state.gameId);
+export async function processMoney(ctx: PluginContext, room: DurableObjectStub<BuckshotRoom>, state: Pick<RoomState, 'gameId' | 'stake' | 'mode'> & { moneyTask?: MoneyTask | null; task?: unknown }, nextWork = false) {
+    const task = state.moneyTask === undefined ? await room.claimMoney(state.gameId) : state.moneyTask;
 
     if (!task) { return; }
 
@@ -81,9 +81,7 @@ export async function processMoney(ctx: PluginContext, room: DurableObjectStub<B
             }
 
             if (alreadyReturned) {
-                await room.moneyResult(state.gameId, task.id, task.lease!, 'DONE', 'Points 预留查询确认本金已退回或到期', 'inactive');
-
-                return;
+                return await room.moneyResult(state.gameId, task.id, task.lease!, 'DONE', 'Points 预留查询确认本金已退回或到期', 'inactive', nextWork);
             }
 
             const result = await execute(service, task, state);
@@ -96,5 +94,5 @@ export async function processMoney(ctx: PluginContext, room: DurableObjectStub<B
         }
     } catch { outcome = 'UNKNOWN'; }
 
-    await room.moneyResult(state.gameId, task.id, task.lease!, outcome, outcome === 'DONE' ? `Points 操作 ${task.id} 已提交` : undefined);
+    return room.moneyResult(state.gameId, task.id, task.lease!, outcome, outcome === 'DONE' ? `Points 操作 ${task.id} 已提交` : undefined, 'committed', nextWork);
 }

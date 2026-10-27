@@ -1,3 +1,4 @@
+import { webRoutes } from './web/routes.js';
 import { scopeFor } from './conversation.js';
 import { DEFAULT_CONFIGURATION } from './templates/reply-config.js';
 import { bindPreviousNavigation, deliver, renderMessage } from './templates/send.js';
@@ -20,7 +21,7 @@ export default definePlugin({
     permissions: ['db', 'durable', 'proactive', 'recall', 'admin'], depends: { 'points.wallet': 'optional' },
     configSchema: { type: 'object', properties: {} },
     durableObjects: { BuckshotRoom, BuckshotPlayerRegistry },
-    commands: Object.fromEntries(['恶魔轮盘', '恶魔轮盘 状态', '恶魔轮盘 退出', '恶魔轮盘 帮助', '恶魔轮盘 历史', '恶魔轮盘 战绩', '恶魔轮盘 挑战'].map(name => [name, {
+    commands: Object.fromEntries(['恶魔轮盘', '恶魔轮盘 进入', '恶魔轮盘 状态', '恶魔轮盘 退出', '恶魔轮盘 帮助', '恶魔轮盘 历史', '恶魔轮盘 战绩', '恶魔轮盘 挑战'].map(name => [name, {
         description: name === '恶魔轮盘' ? '创建或操作恶魔轮盘房间' : name.slice(5), scenes: ['group', 'c2c'] as const,
         handler: async ({ ctx, session, argText }: import('@qqbot/sdk').CommandInput) => {
             const templates = DEFAULT_CONFIGURATION;
@@ -89,10 +90,9 @@ export default definePlugin({
     cron: {
         'buckshot-work': {
             cron: '* * * * *', handler: async ({ ctx }) => {
-                await ensureDatabase(ctx);
                 await cron(ctx);
             }
         }
     },
-    ui: { path: '/ui/', title: '恶魔轮盘', icon: 'crosshair' }, routes: adminRoutes
+    ui: { path: '/ui/', title: '恶魔轮盘', icon: 'crosshair' }, routes: [...adminRoutes, ...webRoutes]
 });

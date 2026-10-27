@@ -1,3 +1,4 @@
+import { replayBattleScript } from './battle.js';
 import { replayTimelineScript, replayTimelineStyle } from './timeline.js';
 import { replayFileScript } from './file.js';
 import { replayImportMarkup, replayToolsScript } from './tools.js';
@@ -5,12 +6,12 @@ import { replayRender } from './render.js';
 import { replayInsightsMarkup, replayInsightsScript, replayInsightsStyle } from './insights.js';
 
 export const replayStyle = replayInsightsStyle + replayTimelineStyle + String.raw`
-.replay-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}.replay-heading p{margin:0;min-width:0}.replay-heading button{flex-shrink:0}#replayDrop{padding:12px 16px}#replayDrop .actions{margin:0}#replayDrop .hint{margin:8px 0 0}.replay-file-help{display:none}#replayDrop.expanded .replay-file-help{display:block}@media(max-width:600px){.replay-heading{flex-wrap:wrap}.replay-heading button{margin-left:auto}}#replayShareFallback{width:100%;min-width:0}#replayDrop[aria-busy=true]{opacity:.7}.replay-round{display:inline-flex;flex-direction:column;align-items:center;gap:4px;border:2px solid var(--qb-border);border-radius:var(--qb-radius);padding:10px;margin:4px;min-width:68px}.replay-round.used{opacity:.5}.replay-round.current{border-color:var(--qb-on-primary)}.replay-round b{font-size:24px}.replay-grid{display:grid;grid-template-columns:220px minmax(0,1fr);gap:16px}.replay-grid>*{min-width:0}#replayTimeline{width:100%}.replay-message{background:var(--qb-surface-muted);padding:14px;border-radius:var(--qb-radius);margin:12px 0;overflow-wrap:anywhere}.replay-message pre{max-height:520px;margin:8px 0;font:inherit;font-size:14px;line-height:1.6}#replaySelect{max-width:100%;min-width:0;flex:1}#replayProgress{display:block;box-sizing:border-box;width:100%;height:44px;min-height:44px;margin:0;padding:0;border:0;border-radius:0;background:transparent;accent-color:var(--qb-primary);cursor:pointer}#replaySummary{overflow-wrap:anywhere}#replay .actions{flex-wrap:wrap}@media(max-width:600px){.replay-grid{grid-template-columns:1fr}#replayTimeline{height:180px}}
+#replayBattle{display:block;width:100%;height:720px;border:1px solid var(--qb-border);border-radius:var(--qb-radius-lg);background:var(--qb-bg)}.replay-round{min-width:0!important;padding:8px!important}.replay-round.intel-round{outline:2px dashed var(--qb-warning);outline-offset:2px}.replay-round b{display:block;width:16px;height:32px;border-radius:5px 5px 2px 2px;background:linear-gradient(90deg,#71332f,#c56a57,#793830);border-bottom:7px solid #b99a57}.replay-round.blank b{background:linear-gradient(90deg,#6f8b99,#ccdce0,#819ba5)}@media(max-width:600px){#replayBattle{height:740px}.replay-grid{gap:8px}#replayViewer{padding:10px}}.replay-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}.replay-heading p{margin:0;min-width:0}.replay-heading button{flex-shrink:0}#replayDrop{padding:12px 16px}#replayDrop .actions{margin:0}#replayDrop .hint{margin:8px 0 0}.replay-file-help{display:none}#replayDrop.expanded .replay-file-help{display:block}@media(max-width:600px){.replay-heading{flex-wrap:wrap}.replay-heading button{margin-left:auto}}#replayShareFallback{width:100%;min-width:0}#replayDrop[aria-busy=true]{opacity:.7}.replay-round{display:inline-flex;flex-direction:column;align-items:center;gap:4px;border:2px solid var(--qb-border);border-radius:var(--qb-radius);padding:10px;margin:4px;min-width:68px}.replay-round.used{opacity:.5}.replay-round.current{border-color:var(--qb-on-primary)}.replay-round b{font-size:24px}.replay-grid{display:grid;grid-template-columns:220px minmax(0,1fr);gap:16px}.replay-grid>*{min-width:0}#replayTimeline{width:100%}.replay-message{background:var(--qb-surface-muted);padding:14px;border-radius:var(--qb-radius);margin:12px 0;overflow-wrap:anywhere}.replay-message pre{max-height:520px;margin:8px 0;font:inherit;font-size:14px;line-height:1.6}#replaySelect{max-width:100%;min-width:0;flex:1}#replayProgress{display:block;box-sizing:border-box;width:100%;height:44px;min-height:44px;margin:0;padding:0;border:0;border-radius:0;background:transparent;accent-color:var(--qb-primary);cursor:pointer}#replaySummary{overflow-wrap:anywhere}#replay .actions{flex-wrap:wrap}@media(max-width:600px){.replay-grid{grid-template-columns:1fr}#replayTimeline{height:180px}}
 `;
-export const replayViewerMarkup = String.raw`<div id="replayViewer" class="qb-card" hidden><div class="replay-heading"><p id="replaySummary"></p><button id="retry" hidden>重新加载本局</button></div><!-- BUCKSHOT_REPLAY_INSIGHTS --><div class="actions"><button id="replayPrev">上一步</button><button id="replayPlay">播放</button><button id="replayNext">下一步</button><button id="replayShare" hidden>分享这一步</button><label>每步停留 <select id="replayInterval"><option value="500">0.5 秒</option><option value="1000" selected>1 秒</option><option value="2000">2 秒</option><option value="3000">3 秒</option></select></label></div><p id="replayShareNotice" role="status"></p><input id="replayShareFallback" aria-label="定位链接" readonly hidden><input id="replayProgress" type="range" min="0" max="1" step="1" value="0" aria-label="操作步骤"><p id="replayCount" class="hint"></p><label>视角 <select id="replayView"><option value="all">全部结果</option><option value="public">仅公开信息</option></select></label><div class="replay-grid"><nav id="replayTimeline" aria-label="操作步骤"></nav><div><article class="replay-message"><h3>弹仓</h3><div id="replayAmmo" aria-label="完整子弹类型"></div><p id="replayAmmoNote" class="hint"></p></article><article class="replay-message"><h3>状态面板</h3><pre id="replayPanel"></pre></article><article class="replay-message"><h3 id="replayAction"></h3><pre id="replayResults"></pre></article></div></div><p class="hint">每步展示操作后的状态和实际结果。回放包含本局完整弹序和情报，视角仅筛选显示。</p></div>
+export const replayViewerMarkup = String.raw`<div id="replayViewer" class="qb-card" hidden><div class="replay-heading"><p id="replaySummary"></p><button id="retry" hidden>重新加载本局</button></div><!-- BUCKSHOT_REPLAY_INSIGHTS --><div class="actions"><button id="replayPrev">上一步</button><button id="replayPlay">播放</button><button id="replayNext">下一步</button><button id="replayShare" hidden>分享这一步</button><label>每步停留 <select id="replayInterval"><option value="500">0.5 秒</option><option value="1000" selected>1 秒</option><option value="2000">2 秒</option><option value="3000">3 秒</option></select></label></div><p id="replayShareNotice" role="status"></p><input id="replayShareFallback" aria-label="定位链接" readonly hidden><input id="replayProgress" type="range" min="0" max="1" step="1" value="0" aria-label="操作步骤"><p id="replayCount" class="hint"></p><label>视角 <select id="replayView"><option value="all">全部结果</option><option value="public">仅公开信息</option></select></label><div class="replay-grid"><nav id="replayTimeline" aria-label="操作步骤"></nav><div><article class="replay-message"><h3>弹仓</h3><div id="replayAmmo" aria-label="完整子弹类型"></div><p id="replayAmmoNote" class="hint"></p></article><iframe id="replayBattle" title="对局画面" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe><p id="replayResults" class="hint" role="status" hidden></p></div></div><p class="hint">按操作播放实际结果。回放包含本局完整弹序和情报，视角仅筛选显示。</p></div>
 `.replace('<!-- BUCKSHOT_REPLAY_INSIGHTS -->', () => replayInsightsMarkup);
-export const replayPlayerScript = replayFileScript + replayRender + replayTimelineScript + String.raw`
-let replayEpoch = 0, replayBusy = false, replayData = null, replayPosition = 0, replayTimer = null;
+export const replayPlayerScript = replayFileScript + replayRender + replayTimelineScript + replayBattleScript + String.raw`
+let replayEpoch = 0, replayBusy = false, replayData = null, replayPosition = 0, replayTimer = null, replayPlaying = false;
 
 function stopReplay() {
     if (replayTimer !== null) {
@@ -18,6 +19,8 @@ function stopReplay() {
         replayTimer = null;
     }
 
+    replayPlaying = false;
+    sceneSend({ action: 'pause', value: true });
     $('replayPlay').textContent = '播放';
 }
 
@@ -78,7 +81,7 @@ function loadReplayData(input, sourceKey = null, position = 0) {
     $('replayProgress').max = String(data.steps.length - 1);
     $('replayView').replaceChildren(new Option('全部结果', 'all'), new Option('仅公开信息', 'public'));
 
-    for (const p of data.players.filter(p => !p.ai)) { $('replayView').append(new Option(p.name, p.id)); }
+    for (const p of data.players) { $('replayView').append(new Option(p.name, p.id)); }
 
     loadReplayInsights();
     const game = data.game;
@@ -91,6 +94,9 @@ function loadReplayData(input, sourceKey = null, position = 0) {
 function invalidateReplay() {
     replayEpoch++;
     stopReplay();
+    sceneRequest++;
+    scenePending = null;
+    sceneSend({ action: 'clear' });
     replayData = null;
     replaySourceKey = null;
     $('replayLocalNotice').textContent = '';
@@ -119,36 +125,49 @@ $('replayView').onchange = renderReplay;
 $('replayPrev').onclick = () => selectReplay(replayPosition - 1);
 $('replayNext').onclick = () => selectReplay(replayPosition + 1);
 
-function tickReplay() {
-    replayPosition = Math.min(replayData.steps.length - 1, replayPosition + 1);
-    renderReplay();
+function scheduleReplay() {
+    if (!replayPlaying || !sceneDone || replayTimer !== null) { return; }
 
-    if (replayPosition === replayData.steps.length - 1) { stopReplay(); } else { replayTimer = setTimeout(tickReplay, Number($('replayInterval').value)); }
-}
-
-$('replayInterval').onchange = () => {
-    if (replayTimer !== null) {
-        clearTimeout(replayTimer);
-        replayTimer = setTimeout(tickReplay, Number($('replayInterval').value));
-    }
-};
-
-$('replayPlay').onclick = () => {
-    if (!replayData) { return; }
-
-    if (replayTimer !== null) {
+    if (replayPosition === replayData.steps.length - 1) {
         stopReplay();
 
         return;
     }
 
-    if (replayPosition === replayData.steps.length - 1) {
+    replayTimer = setTimeout(() => {
+        replayTimer = null;
+        replayPosition++;
+        renderReplay();
+    }, Number($('replayInterval').value));
+}
+
+$('replayInterval').onchange = () => {
+    if (replayTimer !== null) {
+        clearTimeout(replayTimer);
+        replayTimer = null;
+    }
+
+    scheduleReplay();
+};
+$('replayPlay').onclick = () => {
+    if (!replayData) { return; }
+
+    if (replayPlaying) {
+        stopReplay();
+
+        return;
+    }
+
+    if (replayPosition === replayData.steps.length - 1 && sceneDone) {
         replayPosition = 0;
         renderReplay();
     }
 
+    replayPlaying = true;
+    sceneSend({ action: 'pause', value: false });
     $('replayPlay').textContent = '暂停';
-    replayTimer = setTimeout(tickReplay, Number($('replayInterval').value));
+    scheduleReplay();
 };
 window.addEventListener('pagehide', stopReplay);
+document.addEventListener('visibilitychange', () => { if (document.hidden) { stopReplay(); } });
 ` + replayInsightsScript + replayToolsScript;

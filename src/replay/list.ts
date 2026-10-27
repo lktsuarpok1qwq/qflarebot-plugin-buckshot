@@ -19,6 +19,13 @@ export async function listReplays(ctx: PluginContext, params: URLSearchParams): 
         return Response.json({ error: '请选择有效日期范围，最多 31 天' }, { status: 400 });
     }
 
+    const skip = params.get('skip') ?? '';
+    const skipped = new Set(skip ? skip.split(',') : []);
+
+    if (skip.length > 341 || skipped.size > 31 || [...skipped].some(day => !replayDate(day) || day < start || day > end)) {
+        return Response.json({ error: '已加载日期无效，请重新查询' }, { status: 400 });
+    }
+
     let day = end, offset = 0, after = '';
     const cursor = params.get('cursor');
 
@@ -28,7 +35,7 @@ export async function listReplays(ctx: PluginContext, params: URLSearchParams): 
 
             const saved = JSON.parse(cursor);
 
-            if (saved.start !== start || saved.end !== end || !replayDate(saved.day) || saved.day < start || saved.day > end || !Number.isSafeInteger(saved.offset) || saved.offset < 0 || typeof saved.after !== 'string' || saved.after && !saved.after.startsWith(replayPrefix(ctx.botId) + saved.day + '/')) { throw Error(); }
+            if (saved.start !== start || saved.end !== end || saved.skip !== skip || !replayDate(saved.day) || saved.day < start || saved.day > end || !Number.isSafeInteger(saved.offset) || saved.offset < 0 || typeof saved.after !== 'string' || saved.after && !saved.after.startsWith(replayPrefix(ctx.botId) + saved.day + '/')) { throw Error(); }
 
             day = saved.day;
             offset = saved.offset;
@@ -43,6 +50,13 @@ export async function listReplays(ctx: PluginContext, params: URLSearchParams): 
     let read = 0, scanned = 0;
 
     while (day >= start && read < 1000 && scanned < 8) {
+        if (skipped.has(day)) {
+            day = replayDay(day, -1);
+            offset = 0;
+            after = '';
+            continue;
+        }
+
         const prefix = replayPrefix(ctx.botId) + day + '/', remaining = 1000 - read;
         const objects = await ctx.r2.list(prefix, { limit: offset + remaining + 1 });
         const startIndex = after ? objects.findIndex(o => o.key > after) : 0;
@@ -75,7 +89,7 @@ export async function listReplays(ctx: PluginContext, params: URLSearchParams): 
         after = '';
     }
 
-    const next = day >= start ? JSON.stringify({ start, end, day, offset, after }) : null;
+    const next = day >= start ? JSON.stringify({ start, end, day, offset, after, skip }) : null;
 
     return Response.json({ start, end, timezone: REPLAY_ZONE, items, complete: next === null, next }, { headers: { 'cache-control': 'private, no-store' } });
 }

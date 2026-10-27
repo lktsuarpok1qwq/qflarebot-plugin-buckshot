@@ -20,7 +20,7 @@ function score(game: Game, id: string): number {
 }
 
 function world(view: AIView, possibility: number): Game {
-    const shells = view.knowledge.possibilities[possibility];
+    const shells = Array.from({ length: view.knowledge.remaining }, (_, i) => (view.knowledge.possibilities[possibility] >>> i & 1) as 0 | 1);
 
     return {
         ...view.public, players: view.public.players.map(copyPlayer), cursor: view.cursor, shells: [...Array(view.cursor).fill(0), ...shells], shot: false,
@@ -33,7 +33,7 @@ export function chooseAction(view: AIView, level: number, rng: RNG = secureRando
 
     const initial = world(view, 0), actor = initial.current, actions = legalActions(initial);
     const self = initial.players.find(p => p.id === actor)!;
-    const probability = view.knowledge.possibilities.reduce((n, s) => n + s[0], 0) / view.knowledge.possibilities.length;
+    const probability = view.knowledge.possibilities.reduce((n, mask) => n + (mask & 1), 0) / view.knowledge.possibilities.length;
     // 基础评分覆盖所有动作；即使搜索预算耗尽，也不会因列表顺序永远忽略道具。
     const ranked = actions.map(action => {
         if (action.type === 'shoot') {
@@ -50,7 +50,7 @@ export function chooseAction(view: AIView, level: number, rng: RNG = secureRando
         const value = item === 'cigarette' ? (self.life < 4 ? 7 : -4)
             : item === 'medicine' ? (self.life <= 2 ? 3 : -3)
                 : item === 'glass' ? (probability > 0 && probability < 1 ? 5 : -4)
-                    : item === 'phone' ? (view.knowledge.possibilities.length > 1 && view.knowledge.possibilities[0].length >= (initial.mode === 'solo' ? 2 : 3) ? 1 : -4)
+                    : item === 'phone' ? (view.knowledge.possibilities.length > 1 && view.knowledge.remaining >= (initial.mode === 'solo' ? 2 : 3) ? 1 : -4)
                         : item === 'saw' ? probability * 7 - 0.5
                             : item === 'inverter' ? (0.5 - probability) * 8
                                 : item === 'beer' ? (probability > 0.35 && probability < 0.7 ? 0.5 : -3)

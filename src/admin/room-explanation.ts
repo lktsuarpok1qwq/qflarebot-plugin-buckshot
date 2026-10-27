@@ -25,6 +25,11 @@ export function explainRoom(room: ReturnType<typeof view>, now: number) {
     } else if (busyFunds.length || room.status === 'SETTLING') {
         title = '积分处理中';
         lines.push('正在处理冻结、结算或退款，以原资金任务的确认结果为准。');
+    } else if (room.status === 'WEB_JOINING') {
+        title = '等待网页入场';
+        lines.push('每位真人请私聊领取链接并进入网页；全员就绪后才开局或冻结本金。');
+
+        if (room.webJoiningUntil) { lines.push('入场剩余 ' + Math.max(0, Math.ceil((room.webJoiningUntil - now) / 1000)) + ' 秒。'); }
     } else if (room.status === 'WAITING') {
         const minimum = room.mode === 'multi' ? 3 : 2;
 

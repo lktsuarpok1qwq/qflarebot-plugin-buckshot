@@ -7,7 +7,7 @@ export interface Player {
 }
 export interface Intel { loadId: number; position: number; shell: Shell }
 export interface Knowledge {
-    loadId: number; live: number; blank: number; known: Record<number, Shell>; possibilities: Shell[][];
+    loadId: number; live: number; blank: number; known: Record<number, Shell>; remaining: number; possibilities: number[];
 }
 export interface Game {
     mode: Mode; players: Player[]; current: string; direction: 1 | -1; turn: number;
@@ -51,8 +51,9 @@ export function shuffle<T>(values: T[], rng: RNG): T[] {
     return values;
 }
 
-export function itemPool(mode: Mode): Item[] {
-    const common: Item[] = ['glass', 'beer', 'cigarette', 'saw', 'phone', 'inverter', 'adrenaline'];
+const commonItems: readonly Item[] = ['glass', 'beer', 'cigarette', 'saw', 'phone', 'inverter', 'adrenaline'];
+const itemPools: Record<Mode, readonly Item[]> = {
+    solo: [...commonItems, 'cuffs', 'medicine'], duo: [...commonItems, 'jammer'], multi: [...commonItems, 'jammer', 'remote']
+};
 
-    return mode === 'solo' ? [...common, 'cuffs', 'medicine'] : mode === 'duo' ? [...common, 'jammer'] : [...common, 'jammer', 'remote'];
-}
+export function itemPool(mode: Mode): readonly Item[] { return itemPools[mode]; }

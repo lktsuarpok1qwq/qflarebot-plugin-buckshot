@@ -1,3 +1,4 @@
+import { beginWebFrame, webEvents } from '../web/state.js';
 import { moneyReason } from './money-reason.js';
 import { roomRandom, type RandomState } from '../game/random.js';
 import { PERSONALITIES } from '../game/personality.js';
@@ -28,7 +29,7 @@ export function enqueue(s: RoomState, text: string, critical = false, privateId?
     const seq = ++s.seq;
     const task: Task = {
         id: `${s.gameId}:m:${seq}`, seq, kind: 'message', target: privateId ?? s.groupId, private: !!privateId,
-        text, critical, loadId, panel, state: 'PENDING', attempts: 0
+        text, critical, loadId, panel, state: s.web && s.game ? 'SENT' : 'PENDING', attempts: 0
     };
     s.outbox.push(task);
 
@@ -64,7 +65,7 @@ export function clock(s: RoomState, now: number): void {
 
         if (s.aiPaceUntil > now) {
             blockClock(s, now);
-            s.aiDue = s.aiPaceUntil + s.config.values.aiDelaySeconds * 1000;
+            s.aiDue = s.aiPaceUntil + (s.web ? 0 : s.config.values.aiDelaySeconds * 1000);
 
             return;
         }
@@ -72,11 +73,19 @@ export function clock(s: RoomState, now: number): void {
 
     if (s.deadline === undefined) { s.deadline = now + s.remainingMs; }
 
-    if (ai && s.aiDue === undefined) { s.aiDue = now + s.config.values.aiDelaySeconds * 1000; }
+    if (ai && s.aiDue === undefined) { s.aiDue = now + (s.web ? 0 : s.config.values.aiDelaySeconds * 1000); }
 }
 
 export function events(s: RoomState, values: GameEvent[], oldTurn: number, now: number, oldCurrent?: string): void {
-    s.aiPaceUntil = undefined;
+    s.replayIntel = [...(s.replayIntel ?? []), ...values.filter(e => e.type === 'intel')];
+
+    if (s.web) {
+        webEvents(s, values, now);
+        (s.operationEvents ??= []).push(...values);
+    }
+
+    if (!s.web) { s.aiPaceUntil = undefined; }
+
     let summary: import('../templates/presentation.js').Part[] = [];
     const flush = () => {
         if (summary.length) {
@@ -88,6 +97,8 @@ export function events(s: RoomState, values: GameEvent[], oldTurn: number, now: 
     };
 
     for (const event of values) {
+        if (s.web && event.type !== 'finish') { continue; }
+
         if (event.type === 'intel' || event.type === 'load' || event.type === 'finish') { flush(); }
 
         if (event.type === 'intel') {
@@ -101,7 +112,14 @@ export function events(s: RoomState, values: GameEvent[], oldTurn: number, now: 
         } else if (event.type !== 'load' && event.type !== 'finish') {
             summary.push(event.message!);
         } else {
-            enqueue(s, event.text, event.type === 'load' || event.type === 'finish', undefined, event.type === 'load' ? event.loadId : undefined).parts = [{ ...event.message!, values: { ...event.message!.values, ...(event.type === 'finish' && s.replay?.key ? { replayUrl: replayLink(s.replay.key, s.replay.base) } : {}) } }];
+            const task = enqueue(s, event.text, event.type === 'load' || event.type === 'finish', undefined, event.type === 'load' ? event.loadId : undefined);
+
+            if (s.web && event.type === 'finish') {
+                task.state = 'PENDING';
+                task.critical = false;
+            }
+
+            task.parts = [{ ...event.message!, values: { ...event.message!.values, ...(event.type === 'finish' && s.replay?.key ? { replayUrl: replayLink(s.replay.key, s.replay.base) } : {}) } }];
         }
     }
 
@@ -118,13 +136,14 @@ export function events(s: RoomState, values: GameEvent[], oldTurn: number, now: 
             s.reminderSent = false;
         }
 
-        if (oldTurn === -1 || s.game!.current !== oldCurrent || values.some(e => e.type === 'load') || !s.game!.players.find(p => p.id === s.game!.current)!.ai) { enqueue(s, '', true, undefined, undefined, true); }
+        if (!s.web && (oldTurn === -1 || s.game!.current !== oldCurrent || values.some(e => e.type === 'load') || !s.game!.players.find(p => p.id === s.game!.current)!.ai)) { enqueue(s, '', true, undefined, undefined, true); }
 
         blockClock(s, now);
     }
 }
 
 export function startGame(s: RoomState, now: number): void {
+    beginWebFrame(s, undefined, undefined, now);
     const players = s.members.map(p => ({ id: p.id, name: p.name, ai: false }));
 
     requireRule(!s.opponents?.length || s.mode === 'multi' && s.stake === 0 && !isPrivateScope(s.groupId) && s.members.length > 0, '人机仅支持多人免费房间');
@@ -222,6 +241,24 @@ export function cancelGame(s: RoomState, now: number): void {
     if (s.game) { enqueue(s, '', true).parts = [{ key: 'matchCancelled', values: { ...(s.replay ? { replayUrl: replayLink(s.replay.key, s.replay.base) } : {}) } }]; }
 }
 
+function abortWebAdmission(s: RoomState, now: number): void {
+    const reserveTask = s.money.find(t => t.kind === 'reserve');
+
+    if (s.status === 'PREPARING' && reserveTask && !['PENDING', 'FAILED'].includes(reserveTask.state)) {
+        s.abortRequested = true;
+        blockClock(s, now);
+
+        return;
+    }
+
+    if (reserveTask?.state === 'PENDING') {
+        reserveTask.state = 'FAILED';
+        reserveTask.error = 'CANCELLED_BEFORE_DISPATCH';
+    }
+
+    cancelGame(s, now);
+}
+
 export function mutate(s: RoomState, request: Request, admin: boolean, now: number): void {
     const a = request.action, id = request.actor;
     requireRule(a && ['addAI', 'removeAI', 'join', 'leave', 'ready', 'start', 'confirmClose', 'close', 'confirmQuit', 'quit', 'play', 'pause', 'resume', 'cancel', 'retry', 'removed', 'abort', 'reconcile'].includes(a.type), '操作类型无效');
@@ -257,6 +294,9 @@ export function mutate(s: RoomState, request: Request, admin: boolean, now: numb
         requireRule(!member && a.member.id === id && id !== 'ai' && !id.startsWith('ai:'), '已加入或身份不符');
         s.members.push({ ...a.member, name: playerName(a.member.name, s.members) });
         s.members.forEach(p => p.ready = false);
+    } else if (s.web && ['WEB_JOINING', 'PREPARING'].includes(s.status) && (a.type === 'leave' || a.type === 'removed')) {
+        requireRule(s.members.some(m => m.id === (a.type === 'removed' ? a.target : id)), '玩家不在本局');
+        abortWebAdmission(s, now);
     } else if (a.type === 'leave') {
         requireRule(s.status === 'WAITING' && member, '当前不能离开等待房间');
         s.pendingReleases = [...(s.pendingReleases ?? []), { id, claimId: member.claimId ?? s.gameId }];
@@ -277,16 +317,23 @@ export function mutate(s: RoomState, request: Request, admin: boolean, now: numb
 
         requireRule(!s.opponents?.length || s.mode === 'multi' && s.stake === 0, '人机仅支持多人免费房间');
 
-        if (s.stake) { reserve(s, now); } else { startGame(s, now); }
+        if (s.web) {
+            s.status = 'WEB_JOINING';
+            s.web.joiningUntil = now + 120000;
+        } else if (s.stake) { reserve(s, now); } else { startGame(s, now); }
     } else if (a.type === 'confirmClose' || a.type === 'close') {
-        requireRule(s.status === 'WAITING' && member && s.host === id, '仅等待中的房主可以关闭房间');
+        requireRule((['WAITING', 'WEB_JOINING'].includes(s.status) || s.web && s.status === 'PREPARING') && member && s.host === id, '仅等待中的房主可以关闭房间');
 
         if (a.type === 'confirmClose') {
             s.closeConfirmation = { actor: id, version: s.version + 1, expires: now + s.config.values.confirmSeconds * 1000 };
         } else {
             requireRule(s.closeConfirmation?.actor === id && s.closeConfirmation.version === s.version && s.closeConfirmation.expires > now, '请重新确认关闭房间');
-            requireRule(!s.reserved && s.money.length === 0, '资金状态待核对，暂不能关闭');
-            cancelGame(s, now);
+
+            if (s.web && s.status === 'PREPARING') { abortWebAdmission(s, now); } else {
+                requireRule(!s.reserved && s.money.length === 0, '资金状态待核对，暂不能关闭');
+                cancelGame(s, now);
+            }
+
             delete s.closeConfirmation;
         }
     } else if (a.type === 'confirmQuit') {
@@ -294,7 +341,8 @@ export function mutate(s: RoomState, request: Request, admin: boolean, now: numb
         s.confirmations[id] = { version: s.version + 1, expires: now + s.config.values.confirmSeconds * 1000 };
     } else if (a.type === 'removed' && s.status === 'PREPARING') {
         requireRule(s.members.some(m => m.id === a.target), '玩家不在本局');
-        s.departures = [...new Set([...(s.departures ?? []), a.target])];
+
+        if (s.web) { s.abortRequested = true; } else { s.departures = [...new Set([...(s.departures ?? []), a.target])]; }
     } else if (a.type === 'removed' && s.status === 'WAITING') {
         const departed = s.members.find(m => m.id === a.target);
         requireRule(departed, '玩家已离开');
@@ -313,6 +361,7 @@ export function mutate(s: RoomState, request: Request, admin: boolean, now: numb
         if (a.type === 'quit') { requireRule(member && s.confirmations[id]?.version === s.version && s.confirmations[id].expires > now, '请重新确认认输'); }
 
         requireRule(s.status === 'PLAYING' && s.game, '当前不能淘汰玩家');
+        beginWebFrame(s, id, { type: 'eliminate', target }, now);
         const oldTurn = s.game.turn, oldCurrent = s.game.current, result = applyAction(s.game, target, { type: 'eliminate', target }, roomRandom(s));
         s.game = result.game;
         events(s, result.events, oldTurn, now, oldCurrent);
@@ -321,6 +370,7 @@ export function mutate(s: RoomState, request: Request, admin: boolean, now: numb
         requireRule(member && s.status === 'PLAYING' && s.game && !s.outbox.some(t => t.critical && t.state !== 'SENT'), '当前不能操作');
         requireRule(a.move.type === 'shoot' || a.move.type === 'item', '操作类型无效');
         requireRule(s.deadline !== undefined && s.deadline > now, '操作时间已到');
+        beginWebFrame(s, id, a.move, now);
         const oldTurn = s.game.turn, oldCurrent = s.game.current, result = applyAction(s.game, id, a.move, roomRandom(s));
         s.game = result.game;
         events(s, result.events, oldTurn, now, oldCurrent);
@@ -350,7 +400,7 @@ export function mutate(s: RoomState, request: Request, admin: boolean, now: numb
         s.reason = '机器人已退群，待预留核对后退回本金';
         blockClock(s, now);
     } else if (a.type === 'cancel' || a.type === 'abort') {
-        requireRule(['WAITING', 'PREPARING', 'PLAYING'].includes(s.status) && !s.game?.finished, '胜负已固定，不能取消');
+        requireRule(['WAITING', 'WEB_JOINING', 'PREPARING', 'PLAYING'].includes(s.status) && !s.game?.finished, '胜负已固定，不能取消');
         requireRule(!s.money.some(t => t.kind === 'reserve' && t.state !== 'DONE' && t.state !== 'FAILED'), '预留结果未确定');
         cancelGame(s, now);
     } else if (a.type === 'reconcile') {
@@ -389,6 +439,11 @@ export function tick(s: RoomState, now: number, immediateAI = false, onAction?: 
         }
     }
 
+    if (s.status === 'WEB_JOINING' && now >= s.web!.joiningUntil!) {
+        cancelGame(s, now);
+        s.version++;
+    }
+
     if (s.status === 'WAITING' && now >= s.createdAt + s.config.values.waitingMinutes * 60000) {
         s.status = 'CANCELLED';
         s.version++;
@@ -406,6 +461,7 @@ export function tick(s: RoomState, now: number, immediateAI = false, onAction?: 
     const game = s.game!, oldTurn = game.turn, oldCurrent = game.current;
 
     if (s.deadline <= now) {
+        beginWebFrame(s, game.current, { type: 'timeout' }, now);
         const result = applyAction(game, game.current, { type: 'timeout' }, roomRandom(s));
         onAction?.(oldCurrent, { type: 'timeout' });
         s.game = result.game;
@@ -418,12 +474,13 @@ export function tick(s: RoomState, now: number, immediateAI = false, onAction?: 
 
         try { move = chooseAction(observe(game), opponent?.difficulty ?? s.difficulty, roomRandom(s, true), s.challenge ? Infinity : s.config.values.aiBudgetMs, opponent?.personality ?? s.aiPersonality); } catch { move = { type: 'shoot' as const, target: game.players.find(p => p.life > 0 && p.id !== game.current)!.id }; }
 
+        beginWebFrame(s, game.current, move, now);
         const result = applyAction(game, game.current, move, roomRandom(s));
         onAction?.(oldCurrent, move);
         s.game = result.game;
         s.version++;
         events(s, result.events, oldTurn, now, oldCurrent);
-    } else if (s.config.values.reminderSeconds > 0 && !s.reminderSent && s.deadline - now <= s.config.values.reminderSeconds * 1000) {
+    } else if (!s.web && s.config.values.reminderSeconds > 0 && !s.reminderSent && s.deadline - now <= s.config.values.reminderSeconds * 1000) {
         const reminder = enqueue(s, '');
         reminder.expiresAt = s.deadline;
         reminder.parts = [{ key: 'reminder', values: { seconds: String(s.config.values.reminderSeconds) } }];
@@ -438,7 +495,7 @@ export function pendingTasks(s: RoomState) {
 export function view(s: RoomState) {
     return {
         ...(s.challenge ? { challengeDate: s.challenge.date, dailyReward: s.config.values.dailyReward } : {}), ...(s.aiPersonality ? { aiPersonality: s.aiPersonality } : {}),
-        gameId: s.gameId, groupId: s.groupId, version: s.version, status: s.status, mode: s.mode, stake: s.stake, difficulty: s.difficulty,
+        web: !!s.web, webJoiningUntil: s.web?.joiningUntil, webReady: s.web ? Object.values(s.web.access).filter(a => a.session?.ready).length : undefined, gameId: s.gameId, groupId: s.groupId, version: s.version, status: s.status, mode: s.mode, stake: s.stake, difficulty: s.difficulty,
         ...(s.stake && s.mode === 'solo' ? { winReturn: payout(s.stake, s.config.values.multipliers[s.difficulty]) } : {}),
         opponents: (s.opponents ?? []).map(({ id, name, difficulty, personality }) => ({ id, name, difficulty, ...(s.config.values.showAIStyle ? { personality } : {}) })),
         confirmSeconds: s.config.values.confirmSeconds, actionWaiting: s.status === 'PLAYING' && (s.resultUntil ?? 0) > Date.now(),

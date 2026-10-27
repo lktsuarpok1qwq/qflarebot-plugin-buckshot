@@ -1,0 +1,57 @@
+/* 玩家卡片、本人倒计时及持续控制状态。 */
+.table-tools [hidden] { display: none; }
+#surrender { color: var(--qb-fg-muted); }
+#surrender:hover:not(:disabled) { color: var(--qb-danger); background: var(--qb-danger-bg); }
+.battle-board .player[data-seat=bottom] > .nameline { padding-right: 62px; min-height: 28px; }
+.card-timer { position: absolute; top: 9px; right: 10px; z-index: 3; font: 15px/28px var(--qb-font-mono); color: var(--qb-accent); font-variant-numeric: tabular-nums; pointer-events: auto; }
+.life-row { position: relative; z-index: 1; display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; pointer-events: none; }
+.battle-board .life-row .hearts { flex: none; }
+.battle-board .player[data-seat=left], .battle-board .player[data-seat=right] {
+    --side-height: clamp(174px, 29cqh, 210px);
+    width: clamp(72px, 20cqw, 82px);
+    height: var(--side-height); top: calc(50% - var(--side-height) / 2);
+    display: flex; flex-direction: column; padding: 7px 4px;
+}
+.battle-board .player[data-seat=left] .nameline, .battle-board .player[data-seat=right] .nameline { flex-direction: column; gap: 3px; }
+.battle-board .player[data-seat=left] .player-name, .battle-board .player[data-seat=right] .player-name { max-width: 100%; text-align: center; }
+.battle-board .player[data-seat=left] .life-row, .battle-board .player[data-seat=right] .life-row { justify-content: center; gap: 3px; margin: 4px 0 5px; }
+.battle-board .player[data-seat=left] .inventory, .battle-board .player[data-seat=right] .inventory {
+    display: flex; flex-direction: column; flex-wrap: nowrap; align-items: center;
+    gap: 3px; min-height: 0; overflow-y: auto; overflow-x: hidden;
+    scrollbar-width: thin; scrollbar-color: var(--qb-border-strong) transparent;
+    pointer-events: none;
+}
+.battle-board .player .inventory.scrollable { pointer-events: auto; }
+.battle-board .bag-prop { display: flex; flex-direction: column; align-items: center; flex: none; width: 44px; height: auto; gap: 1px; }
+.battle-board .bag-prop .item-art { width: 24px; height: 24px; }
+.bag-name { font-size: 11px; line-height: 14px; color: var(--qb-fg-muted); white-space: nowrap; }
+.battle-board .player.controlled-card { border-color: var(--qb-warning); box-shadow: inset 0 0 0 1px var(--qb-warning); background: linear-gradient(135deg,var(--qb-warning-bg),var(--qb-surface) 65%); }
+.controlled-card .inventory { opacity: .6; }
+.control-badge { display: inline-flex; align-items: center; gap: 3px; padding: 2px 6px 2px 3px; border-radius: 7px; background: var(--qb-warning-bg); color: var(--qb-warning); font-size: 12px; font-weight: 600; white-space: nowrap; }
+.control-badge .item-art { width: 24px; height: 24px; }
+@media (max-width: 480px) { .phone:has(#surrender:not([hidden])) #connection { display: none; } }
+@media (orientation: landscape) and (max-height: 550px) and (pointer: coarse) {
+    .battle-board .player[data-seat=left], .battle-board .player[data-seat=right] { --side-height: 196px; padding: 7px 6px; }
+}
+
+/* 对手信息收紧，保留本人操作区和左右纵向道具。 */
+.battle-board .player:not([data-seat=bottom]) .player-avatar { width: 23px; height: 23px; font-size: 12px; }
+.battle-board .player:not([data-seat=bottom]) .bot-avatar { font-size: 18px; }
+.battle-board .player:not([data-seat=bottom]) .player-name { font-size: 12px; }
+.battle-board .player:not([data-seat=bottom]) .hearts { font-size: 11px; letter-spacing: -1px; margin: 3px 0; }
+.battle-board .player[data-seat=top] { --seat-width: 166px; padding: 7px; }
+.battle-board .player[data-seat=top] .inventory { gap: 3px; }
+.battle-board .player:not([data-seat=bottom]) .control-badge { font-size: 10px; padding: 1px 3px; }
+.battle-board .player:not([data-seat=bottom]) .control-badge .item-art { width: 19px; height: 19px; }
+
+.battle-board .player .steal-choice { pointer-events: auto; position: relative; min-height: 44px; width: 48px; padding: 3px; border: 1px solid var(--qb-accent); border-radius: 9px; background: var(--qb-primary); }
+.battle-board .player .steal-choice:hover:not(:disabled) { box-shadow: 0 0 0 2px var(--qb-accent); }
+.selecting-item .target-hit:not(:disabled) { outline: 2px solid var(--qb-accent); outline-offset: -2px; }
+
+
+
+.heart { display: inline-block; position: relative; line-height: 1.4; }
+.heart-fragment { position: absolute; inset: 0; pointer-events: none; z-index: 2; }
+
+.heart-restored { position: absolute; inset: 0; pointer-events: none; z-index: 2; }
+.heart-glow { position: absolute; inset: -3px; border: 1px solid var(--qb-accent); border-radius: 50%; pointer-events: none; }

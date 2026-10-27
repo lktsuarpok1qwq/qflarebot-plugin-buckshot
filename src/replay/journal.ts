@@ -14,8 +14,7 @@ export class ReplayJournal {
     static readonly schema = [
         'CREATE TABLE replay_jobs (game TEXT PRIMARY KEY, object_key TEXT NOT NULL, header TEXT NOT NULL, due INTEGER, attempts INTEGER NOT NULL DEFAULT 0)',
         'CREATE UNIQUE INDEX replay_jobs_key ON replay_jobs(object_key)',
-        'CREATE TABLE replay_steps (seq INTEGER PRIMARY KEY AUTOINCREMENT, game TEXT NOT NULL, value TEXT NOT NULL)',
-        'CREATE INDEX replay_steps_game ON replay_steps(game,seq)'
+        'CREATE TABLE replay_steps (game TEXT NOT NULL, seq INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY(game,seq)) WITHOUT ROWID'
     ];
 
     constructor(private storage: DurableObjectStorage, private owner?: string) {
@@ -39,7 +38,7 @@ export class ReplayJournal {
             return;
         }
 
-        this.sql.exec('INSERT INTO replay_steps(game,value) VALUES(?,?)', s.gameId, value);
+        this.sql.exec('INSERT INTO replay_steps(game,seq,value) VALUES(?,?,?)', s.gameId, s.replay.count, value);
         s.replay.bytes += bytes;
         s.replay.count += steps.length;
     }
@@ -57,6 +56,8 @@ export class ReplayJournal {
     private readDue(): number | null { return this.sql.exec<{ due: number | null }>("SELECT MIN(due) AS due FROM replay_jobs WHERE due IS NOT NULL AND object_key LIKE 'replays/bs1/%'").toArray()[0]?.due ?? null; }
 
     nextDue(): number | null { return this.due; }
+
+    pending(game: string): boolean { return this.sql.exec<{ game: string }>('SELECT game FROM replay_jobs WHERE game=?', game).toArray().length > 0; }
 
     private serial<T>(work: () => Promise<T>): Promise<T> {
         const result = this.queue.then(work);

@@ -2,7 +2,7 @@ import type { PointsService } from 'qflarebot-plugin-points';
 import type { ConfigSnapshot } from '../config.js';
 import type { Action, Game, Mode } from '../game/types.js';
 
-export type Status = 'WAITING' | 'PREPARING' | 'PLAYING' | 'FINISHED' | 'SETTLING' | 'SETTLED' | 'CLOSED' | 'CANCELLED';
+export type Status = 'WAITING' | 'WEB_JOINING' | 'PREPARING' | 'PLAYING' | 'FINISHED' | 'SETTLING' | 'SETTLED' | 'CLOSED' | 'CANCELLED';
 export interface Member { id: string; name: string; ready: boolean; privateId: string; claimId?: string; nameLookupAt?: number }
 export interface Opponent { id: string; name: string; difficulty: number; personality: import('../game/personality.js').Personality }
 export interface PanelReference { gameId: string; version: number; status: Status; order: string }
@@ -18,6 +18,9 @@ export interface MoneyTask {
     retryAt?: number; retries?: number; state: 'PENDING' | 'SENDING' | 'DONE' | 'UNKNOWN' | 'FAILED'; lease?: string; leaseUntil?: number; error?: string; evidence?: string; resolution?: 'committed' | 'inactive' | 'rejected';
 }
 export interface RoomState {
+    operationEvents?: import('../game/types.js').GameEvent[];
+    replayIntel?: import('../game/types.js').GameEvent[];
+    web?: import('../web/model.js').WebRoom;
     challenge?: import('../game/random.js').Challenge;
     aiPersonality?: import('../game/personality.js').Personality;
     gameRandom?: import('../game/random.js').RandomState;
@@ -43,6 +46,7 @@ export interface Request {
     | { type: 'reconcile'; taskId: string } | { type: 'removed'; target: string } | { type: 'abort' };
 }
 export interface CreateInput {
+    channel?: 'web' | 'qq';
     challenge?: import('../game/random.js').Challenge;
     botId: string; groupId: string; gameId: string; mode: Mode; stake: number; difficulty: number;
     member: Member; config: ConfigSnapshot;

@@ -59,12 +59,14 @@ export function eventName(session: Session, userId = session.userId): string {
 
 // 复用已有快照；只为缺名的本局玩家补缓存，不监听全群消息或逐人查询。
 export async function supplementName(ctx: PluginContext, room: DurableObjectStub<BuckshotRoom>, state: ReturnType<typeof view>, session: Session): Promise<void> {
-    if (!['WAITING', 'PREPARING', 'PLAYING'].includes(state.status)) { return; }
+    if (!['WAITING', 'WEB_JOINING', 'PREPARING', 'PLAYING'].includes(state.status)) { return; }
 
     for (const member of state.members) {
         if (member.nameLookupAt === 0) { continue; }
 
         const fresh = eventName(session, member.id);
+
+        if (state.web && !fresh) { continue; }
 
         if (!fresh && (member.id !== session.userId || isPrivateScope(state.groupId) || (member.nameLookupAt ?? 0) > Date.now())) { continue; }
 
@@ -86,6 +88,8 @@ export async function supplementName(ctx: PluginContext, room: DurableObjectStub
 
                     if (player) { player.name = name.value; }
                 }
+
+                if (state.web) { return; }
 
                 if (fresh) { refreshName(ctx, room, registry, input, name); } else { await lookupName(ctx, room, registry, input, name); }
             } catch (error) { ctx.logger.warn('昵称补充未完成', { outcome: 'coordination_failed', ...diagnostic(error), gameId: state.gameId }); }

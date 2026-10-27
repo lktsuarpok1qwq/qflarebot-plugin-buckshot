@@ -1,3 +1,4 @@
+import { readBody } from '../web/http.js';
 import { statisticsRoutes } from '../statistics/routes.js';
 import { replayRoutes } from '../replay/routes.js';
 import type { Route } from '@qqbot/sdk';
@@ -9,15 +10,6 @@ import { configView, ensureDatabase, saveConfig } from '../integration/database.
 import { drain, registryFor, roomFor } from '../integration/coordinator.js';
 import { page } from './page.js';
 import { decodeAdminConfig } from './multipliers.js';
-
-async function body(request: globalThis.Request, maxBytes = 16384): Promise<Record<string, unknown>> {
-    const text = await request.text();
-    requireRule(new TextEncoder().encode(text).length <= maxBytes, '请求过大');
-    const value = JSON.parse(text);
-    requireRule(value && typeof value === 'object' && !Array.isArray(value), '请求格式错误');
-
-    return value;
-}
 
 const routes: Route[] = [
     ...replayRoutes,
@@ -32,7 +24,7 @@ const routes: Route[] = [
     },
     {
         method: 'POST', path: '/api/config', auth: 'admin', handler: async ({ ctx, request }) => {
-            const input = await body(request) as Parameters<typeof saveConfig>[1];
+            const input = await readBody(request, 16384) as Parameters<typeof saveConfig>[1];
 
             return Response.json(await saveConfig(ctx, { ...input, value: decodeAdminConfig(input.value) }));
         }
@@ -77,7 +69,7 @@ const routes: Route[] = [
     },
     {
         method: 'POST', path: '/api/room', auth: 'admin', handler: async ({ ctx, request }) => {
-            const input = await body(request);
+            const input = await readBody(request, 16384);
             identifier(input.group);
             const command = input.command as Request;
             requireRule(command && ['pause', 'resume', 'cancel', 'retry', 'reconcile'].includes(command.action?.type), '管理操作无效');
@@ -90,7 +82,7 @@ const routes: Route[] = [
     },
     {
         method: 'POST', path: '/api/occupancy', auth: 'admin', handler: async ({ ctx, request }) => {
-            const input = await body(request);
+            const input = await readBody(request, 16384);
             identifier(input.userId);
             const registry = registryFor(ctx, input.userId), owner = await registry.owner();
 
@@ -105,7 +97,7 @@ const routes: Route[] = [
     },
     {
         method: 'POST', path: '/api/points', auth: 'admin', handler: async ({ ctx, request }) => {
-            const input = await body(request), service = ctx.service<PointsService>('points.wallet');
+            const input = await readBody(request, 16384), service = ctx.service<PointsService>('points.wallet');
             requireRule(input.action === 'register' || input.action === 'query', '操作无效');
 
             if (input.action === 'register') { return Response.json(await service.registerSource({ source: 'buckshot' })); }

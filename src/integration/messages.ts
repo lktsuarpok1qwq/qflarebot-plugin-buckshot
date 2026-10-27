@@ -1,3 +1,4 @@
+import { claimWebLink } from '../web/messages.js';
 import { personalText } from '../statistics/messages.js';
 import { replayLink } from '../replay/access.js';
 import { dateParts } from '../replay/format.js';
@@ -29,6 +30,8 @@ export async function command(ctx: PluginContext, session: Session, text: string
     const templates = settings ?? DEFAULT_CONFIGURATION;
     const scope = scopeFor(session);
     const args = text.trim().split(/\s+/), action = args[0] || '';
+
+    if (action === '进入') { return claimWebLink(ctx, session); }
 
     if (action === '帮助') { return renderMessage(templates, 'help', { scene: session.scene as 'group' | 'c2c' }); }
 
@@ -89,7 +92,7 @@ export async function command(ctx: PluginContext, session: Session, text: string
     }
 
     if (action === '退出') {
-        return interact(ctx, session, { ...base(current), action: { type: current.status === 'WAITING' ? 'leave' : 'confirmQuit' } }, templates, requestConfig);
+        return interact(ctx, session, { ...base(current), action: { type: ['WAITING', 'WEB_JOINING'].includes(current.status) || current.web && current.status === 'PREPARING' ? 'leave' : 'confirmQuit' } }, templates, requestConfig);
     }
 
     requireRule(action === '' || action === '状态', '未知操作，发送 /恶魔轮盘 帮助');
@@ -128,7 +131,7 @@ async function confirmCreate(ctx: PluginContext, session: Session, gameId: strin
     const create = prior ?? authorized;
     await coordinateCreate(ctx, create, eventName(session) || create.member.name);
 
-    if (create.mode === 'solo') {
+    if (create.mode === 'solo' && create.channel !== 'web') {
         await drain(ctx, scope, session, undefined, true, { foreground: true });
 
         return;
@@ -208,7 +211,7 @@ export async function interact(ctx: PluginContext, session: Session, data: unkno
         const result = await room.act(request, true);
 
         if (result.stale) {
-            if (result.room.status === 'WAITING') { return renderMessage(templates, 'panel', { room: result.room, actor: session.userId, notice: result.notice }); }
+            if (result.room.status === 'WAITING' || result.room.web) { return renderMessage(templates, 'panel', { room: result.room, actor: session.userId, notice: result.notice }); }
 
             const snapshot = await room.menu(input.gameId, session.userId);
             await supplementName(ctx, room, snapshot.room, session);

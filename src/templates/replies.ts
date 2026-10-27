@@ -1,6 +1,12 @@
 // QQ 展示文案：只修改文字与排版，保留 {{变量名}}；修改后重新构建加载。
 export type Replies = Record<string, string>;
 export const DEFAULT_REPLIES: Replies = {
+    webPrivate: '📩 请私聊机器人发送 /恶魔轮盘 进入，领取本人链接',
+    webClaim: '🎮 领取对局链接',
+    webLink: '🎲 恶魔轮盘 · 网页对局\n🚪 房间 {{gameId}}\n\n[🎮 进入对局]({{url}})\n请勿转发，这是你的操作入口\n链接过期或换设备：/恶魔轮盘 进入',
+    webAdmission: '👥 等待入场 {{ready}}/{{total}}\n📩 请私聊机器人发送 /恶魔轮盘 进入',
+    webOngoing: '🎮 请在网页中继续对局\n补领链接：私聊 /恶魔轮盘 进入',
+    statusWEB_JOINING: '等待网页入场',
     "aiRoster": "{{title}}\n{{items}}",
     "aiAddTitle": "🤖 添加人机 · 选择难度\n性格随机且整局固定；名单变化后真人需重新准备",
     "aiRemoveTitle": "➖ 选择要移除的人机",

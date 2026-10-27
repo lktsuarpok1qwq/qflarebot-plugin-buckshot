@@ -1,0 +1,123 @@
+/* 桌面与即时效果，仅用于本地原型。 */
+.battle-table {
+    position: relative;
+    height: 150px;
+    margin-top: 14px;
+    border: 1px solid var(--qb-border-strong);
+    border-radius: 16px;
+    overflow: hidden;
+    background: radial-gradient(ellipse at 50% 25%, var(--qb-primary), transparent 70%), var(--qb-input);
+    isolation: isolate;
+}
+.battle-table::before {
+    content: '';
+    position: absolute;
+    inset: 8px;
+    border: 1px solid var(--qb-border);
+    border-radius: 10px;
+    transform: perspective(400px) rotateX(22deg);
+    pointer-events: none;
+}
+.table-mark { position: absolute; top: 12px; left: 14px; font: 10px var(--qb-font-mono); letter-spacing: 2px; color: var(--qb-fg-subtle); }
+.table-gun { position: absolute; width: 84%; height: 92px; left: 8%; top: 16px; transform-origin: 52% 65%; }
+.table-gun svg { width: 100%; height: 100%; stroke-width: 1.5; overflow: visible; }
+.gun-metal { fill: var(--qb-fg-muted); stroke: var(--qb-border-strong); }
+.gun-dark { fill: var(--qb-surface-muted); stroke: var(--qb-fg-subtle); }
+.gun-stock { fill: var(--qb-border-strong); stroke: var(--qb-fg-subtle); }
+.gun-detail { stroke: var(--qb-input); }
+.muzzle { opacity: 0; fill: var(--qb-warning); stroke: var(--qb-warning); }
+.table-caption { position: absolute; bottom: 10px; left: 12px; right: 12px; min-height: 32px; display: grid; align-content: center; gap: 2px; text-align: center; line-height: 1.4; }
+.table-caption strong { font-size: 13px; font-weight: 600; }
+.table-caption span { font-size: 11px; color: var(--qb-fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.battle-table[data-kind=live] .table-caption strong { color: var(--qb-warning); }
+.battle-table[data-kind=blank] .table-caption strong { color: var(--qb-fg-muted); }
+.battle-table[data-kind=item] .table-caption strong { color: var(--qb-accent); }
+.prop-stage { position: absolute; width: 90px; height: 80px; top: 17px; left: calc(50% - 45px); display: grid; place-items: center; }
+.prop-stage[hidden] { display: none; }
+.prop-stage svg { width: 76px; height: 76px; stroke-width: 2; color: var(--qb-accent); }
+.effect-layer { position: absolute; inset: 0; pointer-events: none; overflow: hidden; z-index: 4; border-radius: inherit; }
+.impact-number { position: absolute; font: 700 27px var(--qb-font-mono); color: var(--qb-danger); text-shadow: 0 2px 5px var(--qb-bg); }
+.impact-mark { position: absolute; width: 36px; height: 36px; border: 1px solid var(--qb-danger); border-radius: 50%; display: grid; place-items: center; color: var(--qb-danger); font-size: 23px; }
+.hit-wash { position: absolute; inset: 0; border-radius: inherit; background: radial-gradient(ellipse at center, transparent 35%, var(--qb-danger-bg)); box-shadow: inset 0 0 50px var(--qb-danger-bg); }
+.flying-prop { position: absolute; width: 40px; height: 40px; display: grid; place-items: center; font-size: 28px; }
+.flying-prop svg { width: 40px; height: 40px; color: var(--qb-accent); }
+.eject-shell { position: absolute; width: 10px; height: 24px; background: var(--qb-fg-muted); border-bottom: 6px solid var(--qb-warning); border-radius: 3px; }
+.recover-pulse { position: absolute; width: 50px; height: 50px; color: var(--qb-accent); display: grid; place-items: center; font-size: 38px; }
+[data-player].hit-card { outline: 1px solid var(--qb-danger); outline-offset: -1px; }
+[data-player].healed-card { outline: 1px solid var(--qb-accent); outline-offset: -1px; }
+/* 四席围桌：本人下方，三个对手位于上、左、右。 */
+.battle-heading { display: none; }
+.scroll:has(.battle-board) { padding: 12px 10px; }
+.battle-board { position: relative; height: clamp(350px, 46dvh, 420px); width: 100%; isolation: isolate; }
+.battle-board::before { content: ''; position: absolute; inset: 22% 13%; border-radius: 50%; border: 1px solid var(--qb-border-strong); background: radial-gradient(ellipse, var(--qb-primary), var(--qb-input) 68%); box-shadow: inset 0 0 0 7px var(--qb-bg), inset 0 0 0 8px var(--qb-border); z-index: -1; }
+.battle-board .players { display: contents; }
+.battle-board .player { position: absolute; padding: 9px; border-radius: 13px; z-index: 2; }
+.battle-board .player[data-seat=top], .battle-board .player[data-seat=bottom] { width: 174px; left: calc(50% - 87px); }
+.battle-board .player[data-seat=top] { top: 0; }
+.battle-board .player[data-seat=bottom] { bottom: 0; }
+.battle-board .player[data-seat=left], .battle-board .player[data-seat=right] { width: 94px; top: calc(50% - 51px); padding: 8px 5px; }
+.battle-board .player[data-seat=left] { left: 0; }
+.battle-board .player[data-seat=right] { right: 0; }
+.battle-board .nameline { gap: 3px; }
+.battle-board .namebutton { font-size: 12px; }
+.battle-board .hearts { font-size: 13px; margin: 5px 0; }
+.battle-board .inventory { font-size: 16px; gap: 5px; min-height: 22px; }
+.battle-board .battle-table { position: absolute; width: calc(100% - 192px); min-width: 120px; height: 186px; top: calc(50% - 93px); left: 50%; transform: translateX(-50%); margin: 0; border: 0; border-radius: 0; background: none; overflow: visible; }
+.battle-board .battle-table::before, .battle-board .table-mark { display: none; }
+.battle-board .table-gun { width: 56px; height: 132px; top: 9px; left: calc(50% - 28px); transform-origin: 50% 50%; }
+.battle-board .table-gun svg { height: 100%; width: 100%; }
+.battle-board .table-caption { bottom: -3px; left: -3px; right: -3px; }
+.battle-board .table-caption strong { font-size: 11px; padding: 2px; border-radius: 4px; background: var(--qb-bg); }
+.battle-board .table-caption span { display: none; }
+.battle-board .prop-stage { width: 64px; height: 80px; left: calc(50% - 32px); top: 24px; }
+.battle-board .prop-stage svg { width: 58px; height: 58px; }
+.battle-board + .intel { margin: 8px 3px 0; }
+@media(max-width:370px) {
+    .battle-board .player[data-seat=left], .battle-board .player[data-seat=right] { width: 90px; }
+    .battle-board .player[data-seat=top], .battle-board .player[data-seat=bottom] { width: 164px; left: calc(50% - 82px); }
+}
+.battle-heading.phase { display: none; }
+.scroll:has(.battle-board) { position: relative; }
+.battle-board .battle-table { height: 166px; top: calc(50% - 83px); }
+.battle-board .table-gun { width: 54px; height: 122px; left: calc(50% - 27px); top: 10px; }
+.battle-board .table-caption { bottom: 5px; }
+.scroll:has(.load) .battle-board { opacity: .3; }
+.scroll:has(.battle-board) .load { position: absolute; top: 70px; left: 14px; right: 14px; z-index: 3; background: var(--qb-surface); }
+.scroll:has(.battle-board) .intel { position: absolute; left: 12px; right: 12px; bottom: 14px; z-index: 3; margin: 0; background: var(--qb-surface); box-shadow: var(--qb-shadow-overlay); }
+.scroll:has(.battle-board) { container-type: size; }
+.battle-board { height: 100cqh; min-height: 300px; max-height: 420px; }
+.battle-board .battle-table { height: 140px; top: calc(50% - 70px); }
+.battle-board .table-gun { height: clamp(84px, calc(100cqh - 240px), 122px); top: 3px; }
+.battle-board .table-caption { bottom: -2px; min-height: 16px; }
+
+.battle-board .table-caption { bottom: 18px; }
+.battle-board .table-caption strong { font-size: 12px; }
+.battle-table[data-kind=idle] .table-caption { visibility: hidden; }
+/* 玩家与本人道具直接交互，底部只保留回合信息。 */
+.table-meta { padding: max(16px, env(safe-area-inset-top)) 16px 6px; display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--qb-fg-muted); font-size: 12px; }
+.scroll:has(.battle-board) { padding: 14px 10px; }
+.battle-board { max-height: 630px; margin: auto; }
+.battle-board::before { inset: 17% 9%; }
+.battle-board .player { overflow: visible; }
+.battle-board .player .target-hit { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; border-radius: inherit; background: transparent; min-height: 44px; padding: 0; z-index: 0; }
+.battle-board .player .target-hit:hover:not(:disabled) { background: var(--qb-primary); }
+.battle-board .player .target-hit:focus-visible { outline-offset: 3px; }
+.battle-board .player .nameline, .battle-board .player .hearts, .battle-board .player .inventory { position: relative; pointer-events: none; z-index: 1; }
+.battle-board .player-name { font-size: 13px; }
+.battle-board .inventory.own-inventory { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 6px; }
+.battle-board .inventory.own-inventory .inventory-use { pointer-events: auto; position: relative; min-width: 0; min-height: 58px; padding: 4px 0; font-size: 12px; line-height: 1.4; border-radius: 10px; border: 1px solid var(--qb-border-strong); background: var(--qb-surface-muted); }
+.battle-board .inventory-use b { display: block; font-size: 23px; font-weight: normal; }
+.battle-board .inventory-use span { cursor: inherit; display: block; }
+.battle-board .player[data-seat=bottom] { width: 248px; left: calc(50% - 124px); }
+.battle-board .battle-table { width: 172px; height: 260px; top: calc(50% - 130px); pointer-events: none; }
+.battle-board .table-gun { width: 90px; height: 230px; left: calc(50% - 45px); top: 0; }
+.battle-board .table-caption { left: -5px; right: -5px; bottom: 0; }
+.battle-board .prop-stage { width: 90px; height: 90px; top: 65px; left: calc(50% - 45px); }
+.battle-board .prop-stage svg { width: 80px; height: 80px; }
+.battle-board .player[data-seat=left], .battle-board .player[data-seat=right] { top: calc(50% - 48px); }
+@media(max-height:720px) {
+    .battle-board .battle-table { height: 210px; top: calc(50% - 105px); }
+    .battle-board .table-gun { height: 185px; }
+    .battle-board .prop-stage { top: 44px; }
+}
+.battle-board .inventory.own-inventory { pointer-events: auto; }

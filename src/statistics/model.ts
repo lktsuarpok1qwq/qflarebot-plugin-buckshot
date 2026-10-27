@@ -36,7 +36,7 @@ export function captureStatistics(s: RoomState, action: ReplayAction, actor: str
     }
 
     const person = actor && Object.hasOwn(c.players, actor) ? c.players[actor] : undefined;
-    const parts = s.outbox.filter(t => t.seq > seq).flatMap(t => t.parts ?? []);
+    const parts = s.web ? (s.operationEvents ?? []).flatMap(e => e.message ? [e.message] : []) : s.outbox.filter(t => t.seq > seq).flatMap(t => t.parts ?? []);
 
     for (const p of parts) {
         if (p.key === 'shot') {

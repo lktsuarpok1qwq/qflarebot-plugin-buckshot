@@ -1,0 +1,87 @@
+/* 所有装填、观察与抛壳共用弹种颜色。 */
+:root { --shell-live: #a53f35; --shell-live-rib: #713028; --shell-blank: #abb9bd; --shell-cap: #d5dfdf; --shell-brass: #bda467; }
+/* 道具图与装填动作，仅浏览器本地绘制。 */
+.item-art { width: 34px; height: 34px; display: block; flex: none; stroke-width: 1; overflow: visible; filter: drop-shadow(1px 2px 1px #0005); }
+.battle-board .inventory.own-inventory .inventory-use { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; padding: 4px 0; min-height: 66px; }
+.battle-board .inventory-use .item-art { width: 36px; height: 36px; pointer-events: none; }
+.battle-board .bag-prop { display: block; width: 25px; height: 28px; }
+.battle-board .bag-prop .item-art { width: 26px; height: 28px; }
+.battle-board .prop-stage { width: 104px; height: 112px; left: calc(50% - 52px); top: calc(50% - 70px); z-index: 2; }
+.battle-board .prop-stage > .item-art { width: 104px; height: 112px; }
+.battle-board .prop-stage.saw-stage { top: 14%; left: calc(50% - 34px); width: 82px; height: 82px; }
+.battle-board .prop-stage.saw-stage > .item-art { width: 82px; height: 82px; }
+.choice-prop { display: flex; align-items: center; gap: 8px; }
+.prop-pulse { position: absolute; left: calc(50% - 40px); top: calc(50% - 40px); width: 80px; height: 80px; border: 2px solid; border-radius: 50%; pointer-events: none; }
+.phone-dial { transform-origin: 48px 59px; }
+.inverter-arrows { transform-origin: 48px 41px; }
+.syringe-liquid { transform-origin: 48px 68px; }
+.cuff-right { transform-origin: 60px 40px; }
+.remote-button { transform-origin: 48px 45px; }
+.is-loading .battle-board .player { opacity: .32; }
+.is-loading .battle-board .player.active { border-color: var(--qb-border); background: var(--qb-surface); }
+.is-loading .track { visibility: hidden; }
+.loading-banner { position: absolute; z-index: 3; left: 25%; right: 25%; top: calc(50% - 195px); text-align: center; pointer-events: none; }
+.loading-label { font-size: 15px; font-weight: 600; white-space: nowrap; margin-bottom: 10px; }
+.loading-rack { display: flex; justify-content: center; gap: 7px; }
+.rack-round { display: block; width: 15px; height: 34px; border-radius: 4px 4px 2px 2px; border-bottom: 7px solid var(--shell-brass); box-shadow: inset 2px 0 #ffffff30, 1px 2px 2px #0005; }
+.rack-round.live, .eject-shell.shell-live { background: repeating-linear-gradient(90deg,var(--shell-live) 0 3px,var(--shell-live-rib) 3px 4px); }
+.rack-round.blank, .eject-shell.shell-blank { background: var(--shell-blank); border-top: 4px solid var(--shell-cap); }
+.loading-rack.covered .rack-round.loaded { visibility: hidden; }
+.loading-counts { margin-top: 8px; font-size: 12px; white-space: nowrap; color: var(--qb-fg-muted); }
+.battle-table[data-kind=loading] .table-caption { display: none; }
+.loading-banner:has(.covered) .loading-counts { visibility: hidden; }
+.loading-cartridge { position: absolute; width: 20px; height: 40px; }
+.loader-hand { width: 65px; height: 65px; position: absolute; left: -17px; top: 21px; }
+@media (max-height: 780px) and (orientation: portrait) { .loading-banner { top: calc(50% - 150px); } }
+@media (orientation: landscape) and (max-height: 550px) and (pointer: coarse) {
+    .loading-banner { left: 42%; right: 42%; top: 0; }
+    .loading-label { margin: 0 0 4px; font-size: 12px; }
+    .loading-rack { gap: 4px; }
+    .rack-round { width: 10px; height: 23px; border-bottom-width: 5px; }
+    .loading-counts { margin-top: 3px; font-size: 11px; }
+    .battle-board .prop-stage { top: 18%; }
+    .battle-board .inventory.own-inventory .inventory-use { min-height: 58px; }
+    .battle-board .inventory-use .item-art { width: 28px; height: 28px; }
+}
+
+.gun-underside { display: none; }
+.underside-view .gun-profile { visibility: hidden; }
+.underside-view .gun-underside { display: inline; }
+.loading-gate { transform-box: fill-box; transform-origin: center top; }
+.chamber-shell { visibility: hidden; }
+.inspecting .chamber-shell { visibility: visible; }
+.loading-cartridge .rack-round { margin: 0; }
+.rack-slot { display: block; flex: none; width: 15px; height: 34px; }
+.battle-table[data-kind=item]:has(.inspecting) .table-caption { display: none; }
+@media (orientation: landscape) and (max-height: 550px) and (pointer: coarse) {
+    .rack-slot { width: 10px; height: 23px; }
+}
+
+.table-gun.sawed .underside-tip { visibility: hidden; }
+
+.eject-shell { border-bottom-color: var(--shell-brass); }
+.table-gun[data-inspected-shell=live] { --round-color: var(--shell-live); }
+.table-gun[data-inspected-shell=blank] { --round-color: var(--shell-blank); }
+.table-gun[data-inspected-shell=live] .chamber-cap { display: none; }
+.battle-board .table-caption[hidden], .table-caption strong:empty, .table-caption span:empty { display: none; }
+
+.visually-hidden { position: absolute!important; width: 1px!important; height: 1px!important; padding: 0!important; margin: -1px!important; overflow: hidden!important; clip-path: inset(50%)!important; white-space: nowrap!important; border: 0!important; }
+.prop-stage.anchored-prop { position: absolute; width: 76px; height: 76px; pointer-events: none; }
+.prop-stage.anchored-prop > .item-art { width: 76px; height: 76px; }
+.scroll:has(.battle-board) .intel { left: 50%; right: auto; bottom: auto; transform: translateX(-50%); width: max-content; padding: 10px 14px; }
+
+
+.scroll:has(.battle-board) .intel { max-width: calc(100% - 24px); box-sizing: border-box; }
+.intel strong { font-size: 14px; line-height: 1.6; overflow-wrap: anywhere; }
+
+.intel strong { min-height: 23px; display: block; }
+.intel-char { display: inline-block; white-space: pre; animation: intel-pop .16s ease-out both; }
+@keyframes intel-pop { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: translateY(0); } }
+
+.turn-flow { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; stroke: var(--qb-accent); fill: none; stroke-width: 2; }
+
+/* 侧面、斜侧面和底面共享枪体尺寸，翻转过程中保持圆管与机匣厚度。 */
+.gun-roll { display: none; }
+.rolling-view .gun-roll, .rolling-view .gun-underside { display: inline; }
+.rolling-view .gun-profile { visibility: visible; }
+.table-gun.sawed .roll-tip { visibility: hidden; }

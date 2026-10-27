@@ -11,6 +11,19 @@ import { createReplyPresentation, preparePresentation, replyPresentation, type M
 import { renderTemplate } from './replies.js';
 
 const transient = new WeakSet<object>();
+const webLinks = new WeakMap<object, { scope: string; gameId: string; event: string; seconds: number; until: number }>();
+
+export function trackWebLink(message: OutgoingMessage, details: { scope: string; gameId: string; event: string; seconds: number; until: number }) {
+    if (typeof message !== 'object') { return message; }
+
+    webLinks.set(message, details);
+    transient.add(message);
+    replyKeys.set(message, 'webLink');
+    lifetimes.set(message, { kind: 'webLink', gameId: details.gameId, until: details.until });
+
+    return message;
+}
+
 const navigation = new WeakMap<object, string>();
 const previousNavigation = new WeakMap<object, string>();
 const replyKeys = new WeakMap<object, string>();
@@ -45,9 +58,9 @@ export function renderMessage(config: ReplyConfiguration, key: string, input: Me
     const commands: Record<string, string> = { daily: '/恶魔轮盘 挑战', help: '/恶魔轮盘 帮助', status: '/恶魔轮盘 状态', solo: '/恶魔轮盘 新建 单人', duo: '/恶魔轮盘 新建 双人', multi: '/恶魔轮盘 新建 多人' };
     // 复用命令按钮：只填入，不自动发送；从实际文案提取，不另查状态。
     const plain = plainPresentation.message(config, key, input, false, prepared).text;
-    const drafts = [...new Set([...plain.matchAll(/\/恶魔轮盘(?: (?:帮助|状态|战绩|挑战|历史(?: \d+)?|确认创建 [a-f0-9-]{36}))?/g)].map(m => m[0]))];
+    const drafts = [...new Set([...plain.matchAll(/\/恶魔轮盘(?: (?:帮助|状态|进入|战绩|挑战|历史(?: \d+)?|确认创建 [a-f0-9-]{36}))?/g)].map(m => m[0]))];
     const existing = result.buttons.flat().map(b => b.data);
-    const shortcuts = drafts.filter(data => !existing.includes(data)).map(data => ({ action: 'command' as const, label: data.startsWith('/恶魔轮盘 确认创建 ') ? '填入确认指令' : data.includes('历史 ') ? '下一页历史' : ({ 帮助: '查看帮助', 状态: '查看状态', 战绩: '个人战绩', 历史: '查看历史', 挑战: '每日挑战' }[data.split(' ')[1]] ?? '进入大厅'), data, enter: false }));
+    const shortcuts = drafts.filter(data => !existing.includes(data)).map(data => ({ action: 'command' as const, label: data.startsWith('/恶魔轮盘 确认创建 ') ? '填入确认指令' : data.includes('历史 ') ? '下一页历史' : ({ 进入: '领取对局链接', 帮助: '查看帮助', 状态: '查看状态', 战绩: '个人战绩', 历史: '查看历史', 挑战: '每日挑战' }[data.split(' ')[1]] ?? '进入大厅'), data, enter: false }));
 
     if (!['panel', 'menu'].includes(key) && result.buttons.length < 5 && shortcuts.length) { result.buttons.push(shortcuts.slice(0, 5)); }
 
@@ -85,7 +98,7 @@ export function renderMessage(config: ReplyConfiguration, key: string, input: Me
         lifetimes.set(outgoing, { kind, until: input.expiresAt ?? input.now! + (['quit', 'close'].includes(key) ? (input.room?.confirmSeconds ?? 30) * 1000 : 600000), gameId: input.room?.gameId ?? input.values?.gameId, version: input.room?.version });
     }
 
-    if (input.room && !input.room.reading && !input.room.actionWaiting && ['WAITING', 'PREPARING', 'PLAYING'].includes(input.room.status) && (key === 'panel' || key === 'menu' && !input.reason)) {
+    if (input.room && !input.room.reading && !input.room.actionWaiting && ['WAITING', 'WEB_JOINING', 'PREPARING', 'PLAYING'].includes(input.room.status) && (key === 'panel' || key === 'menu' && !input.reason)) {
         panels.set(outgoing, { gameId: input.room.gameId, version: input.room.version, status: input.room.status, order: String(Date.now()).padStart(16, '0') + ':' + crypto.randomUUID() });
         transient.delete(outgoing);
     }
@@ -101,7 +114,36 @@ export async function deliver(ctx: PluginContext, session: Session, message: Out
     if (!message) { return; }
 
     const started = Date.now();
-    const result = await session.reply(message);
+    const webLink = typeof message === 'object' ? webLinks.get(message) : undefined;
+    const recordDelivery = async (outcome: 'SENT' | 'FAILED' | 'UNKNOWN', messageId?: string) => {
+        if (!webLink) { return; }
+
+        const room = ctx.durable.get<BuckshotRoom>('BuckshotRoom', `${ctx.botId}:${webLink.scope}`);
+        const receipt: RecallReceipt | undefined = outcome === 'SENT' && messageId ? {
+            messageId, target: scopeFor(session), key: 'webLink', seconds: webLink.seconds,
+            sentAt: Date.now(), owner: session.userId, kind: 'webLink', until: webLink.until,
+            gameId: webLink.gameId, navigation: webLink.event
+        } : undefined;
+        const save = async () => cleanupSoon(ctx, webLink.scope, await room.webDeliveryResult(webLink.gameId, session.userId, webLink.event, outcome, receipt));
+
+        try { await save(); } catch {
+            ctx.waitUntil(save().catch(() => { ctx.logger.warn('网页入口投递结果待恢复', { gameId: webLink.gameId, code: 'WEB_LINK_DELIVERY_UNKNOWN' }); }));
+        }
+    };
+    let result;
+
+    try { result = await session.reply(message); } catch (error) {
+        await recordDelivery('UNKNOWN');
+
+        if (!webLink) { throw error; }
+
+        return;
+    }
+
+    await recordDelivery(result.ok && result.messageId ? 'SENT' : result.status >= 400 && result.status < 500 ? 'FAILED' : 'UNKNOWN', result.messageId);
+
+    if (webLink) { return; }
+
     ctx.logger.debug('回复消息耗时', { elapsedMs: Date.now() - started, ok: result.ok });
 
     if (!['group', 'c2c'].includes(session.scene) || !result.ok || !result.messageId) { return; }

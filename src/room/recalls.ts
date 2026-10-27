@@ -3,7 +3,7 @@ import type { RoomState } from './model.js';
 export interface RecallReceipt {
     messageId: string; target: string; key: string; seconds: number; sentAt: number;
     gameId?: string; version?: number; owner?: string; navigation?: string; previous?: string;
-    until?: number; kind?: 'choice' | 'create' | 'quit' | 'close' | 'aiRoster';
+    until?: number; kind?: 'webLink' | 'choice' | 'create' | 'quit' | 'close' | 'aiRoster';
 }
 export interface RecallJob extends RecallReceipt { due: number; attempts: number; lease?: string }
 export interface RecallState { bot: string; scope: string; jobs: RecallJob[] }
@@ -40,11 +40,12 @@ export function expireRecalls(state: RecallState, room: RoomState | undefined, n
         if (!job.kind || job.lease) { continue; }
 
         const same = room?.gameId === job.gameId;
-        const completed = job.kind === 'create' ? same
-            : job.kind === 'close' ? !same || room!.status !== 'WAITING' || room!.host !== job.owner || room!.closeConfirmation?.version !== job.version || room!.version !== job.version
-                : job.kind === 'aiRoster' ? !same || room!.status !== 'WAITING' || room!.version !== job.version
-                    : job.kind === 'quit' ? !same || room!.status !== 'PLAYING' || room!.confirmations[job.owner ?? '']?.version !== job.version || room!.version !== job.version
-                        : false;
+        const completed = job.kind === 'webLink' ? !same || !room!.web || !['WEB_JOINING', 'PREPARING', 'PLAYING'].includes(room!.status) || room!.web.access[job.owner ?? '']?.ticket?.event !== job.navigation
+            : job.kind === 'create' ? same
+                : job.kind === 'close' ? !same || !['WAITING', 'WEB_JOINING', ...(room!.web ? ['PREPARING'] : [])].includes(room!.status) || room!.host !== job.owner || room!.closeConfirmation?.version !== job.version || room!.version !== job.version
+                    : job.kind === 'aiRoster' ? !same || room!.status !== 'WAITING' || room!.version !== job.version
+                        : job.kind === 'quit' ? !same || room!.status !== 'PLAYING' || room!.confirmations[job.owner ?? '']?.version !== job.version || room!.version !== job.version
+                            : false;
 
         if (completed) {
             const due = Math.min(job.due, now + job.seconds * 1000);

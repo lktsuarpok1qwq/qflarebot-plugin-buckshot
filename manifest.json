@@ -23,6 +23,14 @@
       ]
     },
     {
+      "name": "恶魔轮盘 进入",
+      "description": "进入",
+      "scenes": [
+        "group",
+        "c2c"
+      ]
+    },
+    {
       "name": "恶魔轮盘 状态",
       "description": "状态",
       "scenes": [
@@ -185,6 +193,35 @@
       "method": "POST",
       "path": "/api/points",
       "auth": "admin"
+    },
+    {
+      "method": "GET",
+      "path": "/play/*",
+      "auth": "public"
+    },
+    {
+      "method": "POST",
+      "path": "/api/web/redeem"
+    },
+    {
+      "method": "POST",
+      "path": "/api/web/ready"
+    },
+    {
+      "method": "GET",
+      "path": "/api/web/state"
+    },
+    {
+      "method": "POST",
+      "path": "/api/web/action"
+    },
+    {
+      "method": "GET",
+      "path": "/api/web/events"
+    },
+    {
+      "method": "POST",
+      "path": "/api/web/logout"
     }
   ],
   "hasMiddleware": false,

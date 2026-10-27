@@ -1,0 +1,85 @@
+/* 红魔 10 Pro+：1216 × 2688 的物理屏幕比例；移动端使用真实浏览器视口。 */
+@media (min-width: 761px) {
+    .layout { grid-template-columns: minmax(0, 1fr) clamp(340px, calc((100dvh - 80px) * 1216 / 2688), 414px); gap: clamp(24px, 5vw, 70px); }
+    .phone { width: 100%; height: auto; min-height: 0; max-height: none; aspect-ratio: 1216 / 2688; border-radius: 24px; }
+}
+.device-note { display: grid; gap: 4px; margin-bottom: 18px; color: var(--qb-fg-muted); font-size: 12px; }
+.device-note strong { color: var(--qb-fg); font-weight: 500; }
+#viewportInfo { font-family: var(--qb-font-mono); color: var(--qb-fg-subtle); }
+.battle-board { max-height: none; min-height: 300px; }
+.battle-board .player[data-seat=top] { --seat-width: clamp(174px, 50cqw, 200px); width: var(--seat-width); left: calc(50% - var(--seat-width) / 2); transform: none; }
+.battle-board .player[data-seat=left], .battle-board .player[data-seat=right] { width: clamp(90px, 26cqw, 112px); }
+.battle-board .player[data-seat=bottom] { --seat-width: min(280px, calc(100% - 24px)); width: var(--seat-width); left: calc(50% - var(--seat-width) / 2); transform: none; }
+.battle-board .inventory.own-inventory { gap: 7px; }
+.battle-board .inventory.own-inventory .inventory-use { min-height: 62px; }
+.battle-board .battle-table { height: clamp(225px, 38cqh, 290px); top: 50%; transform: translate(-50%, -50%); }
+.battle-board .table-gun { height: clamp(200px, 35cqh, 260px); width: 96px; left: calc(50% - 48px); }
+.battle-board .prop-stage { top: calc(50% - 50px); }
+.battle-board .table-caption { bottom: 0; }
+.battle-board .player .target-hit { touch-action: manipulation; }
+.battle-board .inventory-use { touch-action: manipulation; }
+
+.table-tools { display: flex; align-items: center; gap: 4px; }
+.table-meta { padding-top: max(6px, env(safe-area-inset-top)); padding-bottom: 0; }
+.table-tools #connection { white-space: nowrap; font-size: 11px; }
+.player-avatar { position: relative; display: inline-grid; place-items: center; flex: none; width: 28px; height: 28px; border-radius: 50%; overflow: hidden; background: var(--qb-surface-muted); color: var(--qb-fg-muted); font-size: 13px; }
+.player-avatar img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.bot-avatar { background: transparent; font-size: 20px; }
+.waitmember .player-avatar { width: 36px; height: 36px; }
+.battle-board .nameline { position: relative; }
+.battle-board .seat-mark { position: absolute; top: -19px; left: -4px; font-size: 14px; }
+.battle-board .player.dead .player-avatar { filter: grayscale(1); }
+.table-gun.sawed .barrel-tip { visibility: hidden; }
+.table-gun.sawed .muzzle-position { transform: translateY(42px); }
+.table-gun .cut-edge { visibility: hidden; stroke: var(--qb-warning); stroke-width: 3; }
+.table-gun.sawed .cut-edge { visibility: visible; }
+.battle-board .prop-stage.saw-stage { top: 14%; left: calc(50% - 30px); width: 70px; height: 70px; }
+.battle-board .prop-stage.saw-stage svg { width: 70px; height: 70px; }
+.eject-shell { width: 16px; height: 34px; border-bottom-width: 8px; box-shadow: 1px 2px 4px var(--qb-overlay); }
+.shell-feedback { left: calc(50% + 25px); top: 55%; transform: rotate(30deg); }
+.battle-table[data-kind=live] .table-caption, .battle-table[data-kind=blank] .table-caption { display: none; }
+@media (max-width: 370px) { .table-tools #connection { display: none; } }
+.table-gun svg { filter: drop-shadow(2px 4px 3px #0008); }
+.gun-profile { stroke-width: .9; stroke-linejoin: round; }
+.gun-tube { fill: url(#mvp-steel); stroke: #11191e; }
+.gun-body { fill: url(#mvp-receiver); stroke: #10181b; }
+.gun-wood { fill: url(#mvp-walnut); stroke: #2d1e16; }
+.gun-grain { fill: none; stroke: #3e251b; stroke-width: .7; opacity: .65; }
+.gun-rubber { fill: #171b1b; stroke: #080e10; }
+.gun-edge { fill: none; stroke: #a3b1b6; stroke-width: .6; opacity: .6; }
+.gun-rib { fill: #313b40; stroke: #111b20; }
+.gun-highlight { fill: none; stroke: #ccd6d8; stroke-width: .7; opacity: .65; }
+.gun-rib-vents { stroke: #060c0e; stroke-width: 5; stroke-linecap: butt; }
+.gun-band { fill: #374149; stroke: #819096; stroke-width: .5; }
+.gun-sight { fill: #aa9a70; stroke: #252922; }
+.gun-pump-ribs { fill: none; stroke: #291a12; stroke-width: 2; }
+.gun-port { fill: #0a1115; stroke: #849298; stroke-width: .6; }
+.gun-bolt { fill: #4e5c64; stroke: #24323a; stroke-width: .5; }
+.gun-screw { fill: #92a2a7; stroke: #111e24; stroke-width: .5; }
+.gun-screw-slot { stroke: #14242c; stroke-width: .6; }
+.gun-trigger-guard { fill: url(#mvp-steel); stroke: #182329; }
+.gun-trigger { fill: #b1b8b6; stroke: #26333a; stroke-width: .6; }
+@media (max-width: 760px) {
+    .phone { height: 100svh; height: 100dvh; min-height: 0; }
+    .table-meta { padding-left: max(16px, env(safe-area-inset-left)); padding-right: max(16px, env(safe-area-inset-right)); }
+    
+    .device-note { margin-top: 16px; }
+}
+@media (orientation: landscape) and (max-height: 550px) and (pointer: coarse) {
+    .layout { display: flex; flex-direction: column; padding: 0; gap: 0; }
+    .guide { order: 2; width: 100%; max-width: none; padding: 0; }
+    .guide .desktop-copy { display: none; }
+    .phone { width: 100%; height: 100dvh; aspect-ratio: auto; min-height: 0; border: 0; border-radius: 0; }
+    .scroll:has(.battle-board) { padding: 4px 16px; }
+    .battle-board { min-height: 260px; }
+    .battle-board .battle-table { height: 150px; }
+    .battle-board .table-gun { height: 130px; }
+    .battle-board .player[data-seat=top], .battle-board .player[data-seat=bottom] { --seat-width: 210px; width: var(--seat-width); }
+    .battle-board .player[data-seat=top] { left: calc(28% - var(--seat-width) / 2); }
+    .battle-board .player[data-seat=bottom] { --seat-width: 248px; left: calc(72% - var(--seat-width) / 2); }
+    .battle-board .inventory.own-inventory .inventory-use { min-height: 44px; }
+    
+    
+    
+    .table-meta { padding-top: 8px; }
+}

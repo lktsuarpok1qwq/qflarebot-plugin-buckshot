@@ -109,23 +109,44 @@ export function operationStep(s: RoomState, action: ReplayAction, actor: string 
     const results: ReplayResult[] = [];
     const players = s.game?.players ?? s.members;
 
-    for (const task of s.outbox.filter(t => t.seq > previousSeq)) {
-        for (const part of task.parts ?? []) {
-            if (part.key === 'reminder') { continue; }
+    const append = (part: NonNullable<import('../game/types.js').GameEvent['message']>, recipient?: string) => {
+        if (['reminder', 'intel', 'noIntel'].includes(part.key)) { return; }
 
-            const v: NonNullable<ReplayResult['v']> = {};
+        const v: NonNullable<ReplayResult['v']> = {};
 
-            for (const [key, value] of Object.entries(part.values)) {
-                if (key === 'gameId' || key === 'replayUrl') { continue; }
+        for (const [key, value] of Object.entries(part.values)) {
+            if (key === 'gameId' || key === 'replayUrl') { continue; }
 
-                const id = part.users?.[key];
-                const matched = id ? players.filter(p => p.id === id) : ['actor', 'target', 'name'].includes(key) ? players.filter(p => p.name === value) : [];
-                v[key] = matched.length === 1 ? [playerId(s, matched[0].id)!] : ['shell', 'count', 'live', 'blank', 'position', 'loadId'].includes(key) ? Number(value) : value;
-            }
-
-            const recipient = task.private ? s.members.find(m => m.privateId === task.target)?.id : undefined;
-            results.push({ k: part.key, ...(part.key === 'load' && s.game ? { ammo: s.game.shells.slice() } : {}), ...(Object.keys(v).length ? { v } : {}), ...(recipient ? { to: playerId(s, recipient) } : {}) });
+            const id = part.users?.[key];
+            const matched = id ? players.filter(p => p.id === id) : ['actor', 'target', 'name'].includes(key) ? players.filter(p => p.name === value) : [];
+            v[key] = matched.length === 1 ? [playerId(s, matched[0].id)!] : ['shell', 'count', 'live', 'blank', 'position', 'loadId'].includes(key) ? Number(value) : value;
         }
+
+        results.push({ k: part.key, ...(part.key === 'load' && s.game ? { ammo: s.game.shells.slice() } : {}), ...(Object.keys(v).length ? { v } : {}), ...(recipient ? { to: playerId(s, recipient) } : {}) });
+    };
+
+    if (s.web) {
+        for (const event of s.operationEvents ?? []) {
+            if (event.type !== 'intel' && event.message) { append(event.message, event.recipient); }
+        }
+    }
+
+    const hasFinish = s.web && s.operationEvents?.some(e => e.type === 'finish');
+
+    for (const task of s.outbox) {
+        if (task.seq <= previousSeq) { continue; }
+
+        const recipient = task.private ? s.members.find(m => m.privateId === task.target)?.id : undefined;
+
+        for (const part of task.parts ?? []) {
+            if (part.key !== 'finish' || !hasFinish) { append(part, recipient); }
+        }
+    }
+
+    for (const event of s.replayIntel ?? []) {
+        if (!event.message || !event.recipient) { continue; }
+
+        results.push({ k: event.message.key, to: playerId(s, event.recipient), ...(event.intel ? { v: { loadId: event.loadId!, position: Number(event.message.values.position), shell: event.intel.shell } } : {}) });
     }
 
     return { ...(actor ? { actor: playerId(s, actor) } : {}), action, state: snapshot(s), ...(results.length ? { results } : {}) };

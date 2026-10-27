@@ -22,15 +22,16 @@ export function chooseSearch(view: AIView, budgetMs: number, diagnostics?: { nod
     const own = view.public.players.find(p => p.id === view.public.current)!;
     const enemy = view.public.players.find(p => p.id !== own.id && p.life > 0)!;
     const initial: Position = {
-        shells: view.knowledge.possibilities.map(p => p.reduce<number>((mask, bit, i) => mask | bit << i, 0)),
-        remaining: view.knowledge.possibilities[0].length, hp: [own.life, enemy.life],
+        shells: view.knowledge.possibilities,
+        remaining: view.knowledge.remaining, hp: [own.life, enemy.life],
         hands: [[...own.inventory], [...enemy.inventory]],
         control: [own, enemy].map(p => p.control === 'skip' ? 1 : p.control === 'release' ? 2 : 0),
         actor: 0, saw: view.public.saw
     };
     // 同一合法弹序集合的概率、分组和移位只算一次，物品消耗复用只读库存。
     const distributionKeys = new Map<string, number[]>();
-    const distributions = new WeakMap<number[], { key: string; p: number; subsets: number[][]; shifted: number[][]; inverted?: number[] }>();
+    const distributionIds = new Map<string, number>();
+    const distributions = new WeakMap<number[], { key: number; p: number; subsets: number[][]; shifted: number[][]; inverted?: number[] }>();
     const intern = (values: number[]) => {
         const key = values.join(',');
         const previous = distributionKeys.get(key);
@@ -49,8 +50,12 @@ export function chooseSearch(view: AIView, budgetMs: number, diagnostics?: { nod
 
             for (const mask of shells) { subsets[mask & 1].push(mask); }
 
+            const name = shells.join(',');
+
+            if (!distributionIds.has(name)) { distributionIds.set(name, distributionIds.size); }
+
             result = {
-                key: shells.join(','), p: subsets[1].length / shells.length,
+                key: distributionIds.get(name)!, p: subsets[1].length / shells.length,
                 subsets: subsets.map(intern), shifted: subsets.map(values => intern(values.map(mask => mask >>> 1)))
             };
             distributions.set(shells, result);
@@ -60,7 +65,7 @@ export function chooseSearch(view: AIView, budgetMs: number, diagnostics?: { nod
     };
     const probability = (s: Position) => distribution(s.shells).p;
     const values: Partial<Record<Item, number>> = { glass: 2.4, beer: 1.5, cigarette: 3.5, saw: 4, cuffs: 4, jammer: 4, inverter: 3, medicine: 1.2, adrenaline: 5, phone: 1.5 };
-    const hands = new WeakMap<Item[], { key?: string; used?: Map<Item, Item[]>; items?: Set<Item>; score?: number }>();
+    const hands = new WeakMap<Item[], { key?: number; used?: Map<Item, Item[]>; items?: Set<Item>; score?: number }>();
     const hand = (values: Item[]) => {
         let result = hands.get(values);
 
@@ -72,7 +77,8 @@ export function chooseSearch(view: AIView, budgetMs: number, diagnostics?: { nod
         return result;
     };
     const inventoryScore = (items: Item[]) => hand(items).score ??= items.reduce((sum, item) => sum + (values[item] || 0), 0);
-    const inventoryKey = (items: Item[]) => hand(items).key ??= [...items].sort().join(',');
+    const inventoryDigits: Record<Item, number> = { glass: 1, beer: 9, cigarette: 81, saw: 729, cuffs: 6561, jammer: 59049, inverter: 531441, medicine: 4782969, adrenaline: 43046721, phone: 387420489, remote: 3486784401 };
+    const inventoryKey = (items: Item[]) => hand(items).key ??= items.reduce((key, item) => key + inventoryDigits[item], 0);
     const inventoryItems = (items: Item[]) => hand(items).items ??= new Set(items);
     const consume = (values: Item[], item: Item) => {
         const entry = hand(values);

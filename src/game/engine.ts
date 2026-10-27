@@ -4,7 +4,7 @@ import { ITEM_NAMES, itemPool, requireRule, secureRandom, shuffle, type Action, 
 export function copyPlayer(p: Player): Player { return { ...p, inventory: p.inventory.slice() }; }
 
 export function copyKnowledge(k: Knowledge): Knowledge {
-    return { ...k, known: { ...k.known }, possibilities: k.possibilities.map(p => p.slice()) };
+    return { ...k, known: { ...k.known }, possibilities: k.possibilities.slice() };
 }
 
 function copyGame(game: Game, search: boolean): Game {
@@ -18,12 +18,21 @@ function player(game: Game, id: string): Player {
     return value;
 }
 
-export function arrangements(live: number, blank: number): Shell[][] {
-    if (!live) { return [Array(blank).fill(0)]; }
+const initialArrangements = new Map<string, readonly number[]>();
 
-    if (!blank) { return [Array(live).fill(1)]; }
+// 低位是当前弹；保留原排列顺序及每个排列的概率权重。
+export function arrangements(live: number, blank: number): number[] {
+    const key = live + ':' + blank;
+    let saved = initialArrangements.get(key);
 
-    return [...arrangements(live - 1, blank).map(t => [1, ...t] as Shell[]), ...arrangements(live, blank - 1).map(t => [0, ...t] as Shell[])];
+    if (!saved) {
+        saved = !live ? [0] : !blank ? [(1 << live) - 1]
+            : [...arrangements(live - 1, blank).map(mask => (mask << 1) | 1), ...arrangements(live, blank - 1).map(mask => mask << 1)];
+
+        if (live + blank <= 8) { initialArrangements.set(key, saved); }
+    }
+
+    return saved.slice();
 }
 
 function load(game: Game, rng: RNG, events: GameEvent[]): void {
@@ -40,7 +49,7 @@ function load(game: Game, rng: RNG, events: GameEvent[]): void {
     for (const p of game.players) {
         if (game.mode === 'solo') { p.control = 'none'; }
 
-        game.knowledge[p.id] = { loadId: game.loadId, live, blank: count - live, known: {}, possibilities: possibilities.map(p => p.slice()) };
+        game.knowledge[p.id] = { loadId: game.loadId, live, blank: count - live, known: {}, remaining: count, possibilities: possibilities.slice() };
 
         if (p.life > 0) {
             for (let i = 0, slots = Math.min(amount, 8 - p.inventory.length); i < slots; i++) {
@@ -109,7 +118,9 @@ function consumeShell(game: Game): Shell {
     const shell = game.shells[game.cursor++];
 
     for (const knowledge of Object.values(game.knowledge)) {
-        knowledge.possibilities = knowledge.possibilities.filter(p => p[0] === shell).map(p => p.slice(1));
+        knowledge.possibilities = knowledge.possibilities.filter(mask => (mask & 1) === shell).map(mask => mask >>> 1);
+
+        knowledge.remaining--;
 
         if (knowledge.live >= 0 && knowledge.blank >= 0) {
             if (shell) { knowledge.live--; } else { knowledge.blank--; }
@@ -174,7 +185,7 @@ function useItem(game: Game, actor: Player, item: Item, target: string | undefin
         if (relative) {
             const position = game.cursor + relative - 1, shell = game.shells[position];
             game.knowledge[actor.id].known[position] = shell;
-            game.knowledge[actor.id].possibilities = game.knowledge[actor.id].possibilities.filter(p => p[relative - 1] === shell);
+            game.knowledge[actor.id].possibilities = game.knowledge[actor.id].possibilities.filter(mask => ((mask >>> (relative - 1)) & 1) === shell);
             events.push({ type: 'intel', recipient: actor.id, loadId: game.loadId, intel: { loadId: game.loadId, position, shell }, message: { key: 'intel', values: { loadId: String(game.loadId), position: String(relative), shell: String(shell) } }, text: `装填 ${game.loadId}：使用时第 ${relative} 发是${shell ? '实弹' : '空弹'}` });
         } else {
             events.push({ type: 'intel', recipient: actor.id, loadId: game.loadId, message: { key: 'noIntel', values: {} }, text: '电话没有提供弹药情报' });
@@ -198,7 +209,7 @@ function useItem(game: Game, actor: Player, item: Item, target: string | undefin
 
         // 只有已知当前弹的观察者能确定新比例；不读取他人的私密信息。
         for (const knowledge of Object.values(game.knowledge)) {
-            knowledge.possibilities = knowledge.possibilities.map(p => [p[0] ? 0 : 1, ...p.slice(1)]);
+            knowledge.possibilities = knowledge.possibilities.map(mask => mask ^ 1);
 
             if (knowledge.known[game.cursor] !== undefined) {
                 const known = knowledge.known[game.cursor];

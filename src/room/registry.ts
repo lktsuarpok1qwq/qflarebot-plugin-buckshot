@@ -57,28 +57,42 @@ export class BuckshotPlayerRegistry extends StoredObject {
         const names = this.read<CachedName[]>('names') ?? [];
         const cached = names.find(n => n.group === group), now = Date.now();
 
-        if (cached && cached.nextLookup > now && (cached.value || !cleanName(eventName))) { return { value: cached.value, nextLookup: cached.nextLookup }; }
+        const fresh = cleanName(eventName), shared = [...names].reverse().find(n => n.value)?.value || '';
 
-        const value = cached?.value || cleanName(eventName);
-        const token = !isPrivateScope(group) && (cached?.value || !value) ? crypto.randomUUID() : undefined;
+        if (cached && cached.nextLookup > now && (!fresh || fresh === cached.value) && (cached.value || !shared)) { return { value: cached.value, nextLookup: cached.nextLookup }; }
+
+        const value = fresh || cached?.value || shared;
+        const token = !fresh && !isPrivateScope(group) && (cached?.value || !value) ? crypto.randomUUID() : undefined;
         const next: CachedName = { group: group, value, nextLookup: now + (token ? 30000 : value ? 86400000 : 300000), ...(token ? { token } : {}) };
         this.write('names', [...names.filter(n => n.group !== group).slice(-7), next]);
 
         return { value, nextLookup: next.nextLookup, ...(token ? { token } : {}) };
     }
 
-    rememberName(group: string, eventName: string): void {
-        identifier(group);
+    private saveName(group: string, eventName: string): void {
         const value = cleanName(eventName);
 
         if (!value) { return; }
 
-        this.ctx.storage.transactionSync(() => {
-            const names = this.read<CachedName[]>('names') ?? [];
+        const names = this.read<CachedName[]>('names') ?? [];
 
-            if (names.some(n => n.group === group && n.value)) { return; }
+        if (names.some(n => n.group === group && n.value === value)) { return; }
 
-            this.write('names', [...names.filter(n => n.group !== group).slice(-7), { group, value, nextLookup: Date.now() + 86400000 }]);
+        this.write('names', [...names.filter(n => n.group !== group).slice(-7), { group, value, nextLookup: Date.now() + 86400000 }]);
+    }
+
+    rememberName(group: string, eventName: string): void {
+        identifier(group);
+        this.ctx.storage.transactionSync(() => this.saveName(group, eventName));
+    }
+
+    webOwner(eventName: string) {
+        return this.ctx.storage.transactionSync(() => {
+            const owner = this.owner();
+
+            if (owner) { this.saveName(owner.groupId, eventName); }
+
+            return owner;
         });
     }
 

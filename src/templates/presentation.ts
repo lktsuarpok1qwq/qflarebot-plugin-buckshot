@@ -138,7 +138,7 @@ export function createReplyPresentation(render: typeof renderTemplate, escape: t
 
         if (key === 'menu' && input.reason) { return { text: personal(text(config, input.reason, { name: '你' }), input), buttons: [] }; }
 
-        if (['panel', 'menu'].includes(key) && (input.room?.reading || input.room?.actionWaiting)) { return { text: personal(text(config, input.room.reading ? 'readingWait' : 'menuBusy'), input), buttons: [] }; }
+        if (!input.room?.web && ['panel', 'menu'].includes(key) && (input.room?.reading || input.room?.actionWaiting)) { return { text: personal(text(config, input.room.reading ? 'readingWait' : 'menuBusy'), input), buttons: [] }; }
 
         const values = { ...input.values }, raw: string[] = [], dynamic = { ...input.dynamic };
         let choices = input.choices ?? [];
@@ -179,7 +179,13 @@ export function createReplyPresentation(render: typeof renderTemplate, escape: t
                 values.turn = t('aiWaiting');
             }
 
-            if (withButtons) { for (const action of s.status === 'WAITING' ? ['join', 'ready', 'start', 'leave', 'close'] : s.status === 'PLAYING' ? ['choose', 'quit'] : []) { dynamic[action] = JSON.stringify({ gameId: s.gameId, expectedVersion: s.version, ...(action === 'choose' ? { menu: 0 } : { action: { type: action === 'quit' ? 'confirmQuit' : action === 'close' ? 'confirmClose' : action } }) }); } }
+            if (s.web && s.status !== 'WAITING' && !s.game?.finished) {
+                values.items = s.status === 'WEB_JOINING' ? t('webAdmission', { ready: String(s.webReady ?? 0), total: String(s.members.length) }) : t('webOngoing');
+                values.timer = '';
+                values.turn = '';
+            }
+
+            if (withButtons) { for (const action of s.status === 'WAITING' ? ['join', 'ready', 'start', 'leave', 'close'] : s.web && ['WEB_JOINING', 'PREPARING'].includes(s.status) ? ['leave', 'close'] : s.status === 'PLAYING' && !s.web ? ['choose', 'quit'] : []) { dynamic[action] = JSON.stringify({ gameId: s.gameId, expectedVersion: s.version, ...(action === 'choose' ? { menu: 0 } : { action: { type: action === 'quit' ? 'confirmQuit' : action === 'close' ? 'confirmClose' : action } }) }); } }
         } else if (key === 'menu') {
             const s = input.room!, moves = input.moves ?? [];
             const { offset, count, canQuit, selected, players, menu } = prepared;
